@@ -33,3 +33,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m polyscholar --smoke-test
+      - name: Check local native workflows with synthetic data
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_desktop.py
