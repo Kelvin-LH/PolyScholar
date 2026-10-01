@@ -9,15 +9,13 @@ from polyscholar.store import LocalStore, SETTINGS
 class StoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.store = LocalStore(self.root / 'library')
+        self.addCleanup(self.store.close)
         self.source = self.root / 'source.pdf'
         self.source.write_bytes(b'%PDF-1.7\n synthetic original')
         self.document = self.store.import_pdf(self.source)
-
-    def tearDown(self):
-        self.store.close()
-        self.temp.cleanup()
 
     def completed_job(self):
         job = self.store.new_job(self.document['id'], 'babeldoc')
