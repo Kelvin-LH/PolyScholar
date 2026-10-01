@@ -61,6 +61,33 @@ class LocalService:
     def list_documents(self):
         return self.store.list_documents()
 
+    def list_collections(self):
+        return self.store.list_collections()
+
+    def create_collection(self, name, parent_id=None):
+        return self.store.create_collection(name, parent_id)
+
+    def update_collection(self, identifier, name, parent_id=None):
+        return self.store.update_collection(identifier, name, parent_id)
+
+    def delete_collection(self, identifier):
+        return self.store.delete_collection(identifier)
+
+    def set_membership(self, document_id, collection_id, present=True):
+        return self.store.set_membership(document_id, collection_id, present)
+
+    def document_collections(self, document_id):
+        return self.store.document_collections(document_id)
+
+    def list_tags(self):
+        return self.store.list_tags()
+
+    def rename_tag(self, old, new=None):
+        return self.store.rename_tag(old, new)
+
+    def search_documents(self, **criteria):
+        return self.store.search_documents(**criteria)
+
     def import_pdf(self, path):
         return self.store.import_pdf(path)
 

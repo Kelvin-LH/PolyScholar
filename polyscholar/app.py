@@ -7,14 +7,15 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
     QVBoxLayout, QLabel, QPushButton, QListWidget, QStackedWidget, QLineEdit,
     QComboBox, QFileDialog, QMessageBox, QFormLayout, QTextEdit, QTableWidget,
-    QTableWidgetItem, QHeaderView, QSplitter, QScrollArea, QFrame, QInputDialog)
+    QTableWidgetItem, QHeaderView, QSplitter, QScrollArea, QFrame, QInputDialog, QTreeWidget, QTreeWidgetItem, QCheckBox,
+    QAbstractItemView, QDialog, QDialogButtonBox)
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
 
 STYLE = """
 QWidget { background:#ffffff; color:#1c2532; font-size:15px; }
 QWidget#sidebar { background:#f1f4f5; }
-QLabel#brand { color:#23614f; font-size:25px; font-weight:600; }
+QLabel#brand { background:transparent; color:#23614f; font-size:25px; font-weight:600; }
 QLabel#heading { font-size:32px; font-weight:600; }
 QLabel#muted { color:#718096; }
 QPushButton { min-height:24px; padding:10px 18px; border:1px solid #d8dfe5; border-radius:5px; }
@@ -23,6 +24,9 @@ QPushButton#primary { background:#23614f; color:white; border:0; }
 QPushButton:disabled { color:#99a4af; background:#f4f5f6; }
 QLineEdit,QComboBox { min-height:24px; padding:9px; border:1px solid #d8dfe5; border-radius:4px; }
 QTextEdit { padding:9px; border:1px solid #d8dfe5; border-radius:4px; }
+QTreeWidget { border:1px solid #d8dfe5; outline:0; }
+QTreeWidget::item { padding:6px 3px; }
+QTreeWidget::item:selected { color:#23614f; background:#e6f1ec; }
 QListWidget { border:0; background:transparent; outline:0; }
 QListWidget::item { padding:16px; margin:3px 0; }
 QListWidget::item:selected { color:white; background:#23614f; border-radius:5px; }
@@ -67,35 +71,143 @@ class Window(QMainWindow):
         l=self.page('文献库','本地整理文献、元数据与笔记。集合与标签管理将逐步对标 Zotero。')
         r=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('搜索标题、作者、DOI、标签');self.search.textChanged.connect(self.filter_docs)
         r.addWidget(self.search);r.addWidget(self.button('导入 PDF',self.import_pdf,True));l.addLayout(r)
-        split=QSplitter();self.document_list=QListWidget();self.document_list.currentRowChanged.connect(self.select_doc);split.addWidget(self.document_list)
-        inspector=QWidget();f=QFormLayout(inspector);self.fields={}
+        split=QSplitter()
+        organize=QWidget();organize.setMinimumWidth(160);ol=QVBoxLayout(organize);ol.setContentsMargins(0,0,12,0)
+        self.collection_tree=QTreeWidget();self.collection_tree.setHeaderLabel('集合');self.collection_tree.currentItemChanged.connect(lambda *args:self.filter_docs());ol.addWidget(self.collection_tree,1)
+        ol.addWidget(self.button('新建集合',self.new_collection))
+        controls=QHBoxLayout();self.collection_edit_button=self.button('编辑',self.edit_collection);self.collection_delete_button=self.button('删除',self.remove_collection);controls.addWidget(self.collection_edit_button);controls.addWidget(self.collection_delete_button);ol.addLayout(controls)
+        self.include_children=QCheckBox('包含子集合');self.include_children.toggled.connect(self.filter_docs);ol.addWidget(self.include_children)
+        ol.addWidget(QLabel('标签（可多选）'));self.tag_filter=QListWidget();self.tag_filter.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection);self.tag_filter.setMaximumHeight(160);self.tag_filter.itemSelectionChanged.connect(self.filter_docs);ol.addWidget(self.tag_filter)
+        tag_actions=QHBoxLayout();tag_actions.addWidget(self.button('重命名',self.rename_selected_tag));tag_actions.addWidget(self.button('删除标签',self.remove_selected_tag));ol.addLayout(tag_actions);ol.addWidget(self.button('清除筛选',self.clear_filters))
+        split.addWidget(organize)
+        self.document_list=QListWidget();self.document_list.setMinimumWidth(160);self.document_list.currentRowChanged.connect(self.select_doc);split.addWidget(self.document_list)
+        inspector=QWidget();inspector.setMinimumWidth(280);f=QFormLayout(inspector);self.fields={}
         for k,name in [('title','标题'),('authors','作者'),('doi','DOI'),('year','年份'),('tags','标签')]:
             e=QLineEdit();self.fields[k]=e;f.addRow(name,e)
         self.notes=QTextEdit();self.notes.setPlaceholderText('本地笔记');f.addRow('笔记',self.notes)
+        self.membership_info=QLabel('');self.membership_info.setWordWrap(True);f.addRow('所属集合',self.membership_info);self.membership_add_button=self.button('加入集合',self.add_to_collection);self.membership_remove_button=self.button('移出当前集合',self.remove_from_collection);f.addRow(self.membership_add_button);f.addRow(self.membership_remove_button);
         f.addRow(self.button('保存条目',self.save_doc,True));f.addRow(self.button('阅读文献',self.open_original));f.addRow(self.button('删除条目',self.delete_doc))
-        split.addWidget(inspector);split.setSizes([740,320]);l.addWidget(split,1)
+        split.addWidget(inspector);split.setSizes([210,520,300]);l.addWidget(split,1)
         self.empty=QLabel('还没有文献，请先导入本地 PDF。');self.empty.setObjectName('muted');l.addWidget(self.empty)
     def selected(self):
         item=self.document_list.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item else None
     def filter_docs(self):
-        needle=self.search.text().lower();current=self.selected();self.document_list.clear()
-        for d in self.docs:
-            if needle and needle not in ' '.join(str(d.get(k,'')) for k in ['title','authors','doi','tags']).lower():continue
-            self.document_list.addItem(d['title']);item=self.document_list.item(self.document_list.count()-1);item.setData(Qt.ItemDataRole.UserRole,d)
+        if not hasattr(self,'document_list'):return
+        self.collection_edit_button.setEnabled(self.current_collection() is not None);self.collection_delete_button.setEnabled(self.current_collection() is not None);self.include_children.setEnabled(self.current_collection() is not None)
+        current=self.selected();self.document_list.clear()
+        collection=self.current_collection()
+        matches=self.service.search_documents(text=self.search.text(),collection_id=collection,
+            unfiled=self.collection_view()=='__unfiled__',tags=[item.text() for item in self.tag_filter.selectedItems()],
+            include_descendants=self.include_children.isChecked())
+        for d in matches:
+            self.document_list.addItem(d['title']);item=self.document_list.item(self.document_list.count()-1);item.setData(Qt.ItemDataRole.UserRole,d);item.setToolTip(d['title'])
             if current and current['id']==d['id']:self.document_list.setCurrentItem(item)
+        if hasattr(self,'empty'):
+            self.empty.setVisible(self.document_list.count()==0);self.empty.setText('当前集合或筛选下没有文献。' if self.docs else '还没有文献，请先导入本地 PDF。')
     def select_doc(self,_):
         d=self.selected() or {}
         for k,e in self.fields.items():e.setText((', '.join(d.get(k,[])) if k=='tags' else str(d.get(k,'') or '')))
         self.notes.setPlainText(d.get('notes',''))
+        collections={c['id']:c['name'] for c in self.service.list_collections()}
+        member_ids=self.service.document_collections(d['id']) if d else []
+        self.membership_info.setText('、'.join(collections[i] for i in member_ids) or '未分类')
+        self.membership_add_button.setEnabled(bool(d));self.membership_remove_button.setEnabled(bool(d) and self.current_collection() in member_ids)
     def refresh(self):
-        self.docs=self.service.list_documents();self.filter_docs();self.empty.setVisible(not self.docs)
+        self.docs=self.service.list_documents();self.refresh_organization();self.filter_docs()
         self.task_doc.clear()
         for d in self.docs:self.task_doc.addItem(d['title'],d['id'])
         self.refresh_jobs();self.refresh_citation()
+    def collection_view(self):
+        item=self.collection_tree.currentItem()
+        return item.data(0,Qt.ItemDataRole.UserRole) if item else '__all__'
+    def current_collection(self):
+        value=self.collection_view()
+        return None if value in ('__all__','__unfiled__') else value
+    def refresh_organization(self):
+        previous=self.collection_view();selected_tags={item.text() for item in self.tag_filter.selectedItems()}
+        self.collection_tree.blockSignals(True);self.collection_tree.clear()
+        items={}
+        for label,identifier in [('全部文献','__all__'),('未分类','__unfiled__')]:
+            item=QTreeWidgetItem([label]);item.setData(0,Qt.ItemDataRole.UserRole,identifier);self.collection_tree.addTopLevelItem(item);items[identifier]=item
+        collections=self.service.list_collections()
+        for c in collections:
+            item=QTreeWidgetItem([f"{c['name']} ({c['count']})"]);item.setData(0,Qt.ItemDataRole.UserRole,c['id']);item.setToolTip(0,c['name']);items[c['id']]=item
+        for c in collections:
+            item=items[c['id']]
+            if c['parentId']:items[c['parentId']].addChild(item)
+            else:self.collection_tree.addTopLevelItem(item)
+        self.collection_tree.expandAll();self.collection_tree.setCurrentItem(items.get(previous,items['__all__']));self.collection_tree.blockSignals(False)
+        self.tag_filter.blockSignals(True);self.tag_filter.clear()
+        for tag in self.service.list_tags():
+            self.tag_filter.addItem(tag);item=self.tag_filter.item(self.tag_filter.count()-1);item.setSelected(tag in selected_tags)
+        self.tag_filter.blockSignals(False)
+    def collection_picker(self,title,allow_root=False,exclude=None,current=None):
+        collections=self.service.list_collections();by_id={c['id']:c for c in collections}
+        dialog=QDialog(self);dialog.setWindowTitle(title);layout=QVBoxLayout(dialog);combo=QComboBox()
+        if allow_root:combo.addItem('顶层',None)
+        excluded={exclude} if exclude else set()
+        while True:
+            expanded=excluded|{c['id'] for c in collections if c['parentId'] in excluded}
+            if expanded==excluded:break
+            excluded=expanded
+        for c in collections:
+            if c['id'] in excluded:continue
+            names=[c['name']];parent=c['parentId']
+            while parent:
+                names.insert(0,by_id[parent]['name']);parent=by_id[parent]['parentId']
+            combo.addItem(' / '.join(names),c['id'])
+        if current is not None or allow_root:
+            index=combo.findData(current)
+            if index>=0:combo.setCurrentIndex(index)
+        if combo.count()==0:
+            QMessageBox.information(self,'没有集合','请先新建集合。');return False,None
+        layout.addWidget(combo);buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(dialog.accept);buttons.rejected.connect(dialog.reject);layout.addWidget(buttons)
+        return dialog.exec()==QDialog.DialogCode.Accepted,combo.currentData()
+    def new_collection(self):
+        parent=self.current_collection();name,ok=QInputDialog.getText(self,'新建子集合' if parent else '新建集合','集合名称')
+        if ok:self.guard(lambda:self.service.create_collection(name,parent));self.refresh()
+    def edit_collection(self):
+        identifier=self.current_collection()
+        if not identifier:return
+        collection=next(c for c in self.service.list_collections() if c['id']==identifier)
+        name,ok=QInputDialog.getText(self,'编辑集合','集合名称',text=collection['name'])
+        if not ok:return
+        accepted,parent=self.collection_picker('选择集合所在层级',allow_root=True,exclude=identifier,current=collection['parentId'])
+        if accepted:self.guard(lambda:self.service.update_collection(identifier,name,parent));self.refresh()
+    def remove_collection(self):
+        identifier=self.current_collection()
+        if identifier and QMessageBox.question(self,'删除集合','删除当前集合及其子集合？文献、附件和笔记会保留。')==QMessageBox.StandardButton.Yes:
+            self.guard(lambda:self.service.delete_collection(identifier));self.refresh()
+    def add_to_collection(self):
+        document=self.selected()
+        if not document:return
+        ok,identifier=self.collection_picker('加入集合')
+        if ok:self.guard(lambda:self.service.set_membership(document['id'],identifier));self.refresh()
+    def remove_from_collection(self):
+        document=self.selected();identifier=self.current_collection()
+        if document and identifier:self.guard(lambda:self.service.set_membership(document['id'],identifier,False));self.refresh()
+    def rename_selected_tag(self):
+        selected=self.tag_filter.selectedItems()
+        if len(selected)!=1:
+            QMessageBox.information(self,'重命名标签','请只选择一个标签。');return
+        old=selected[0].text();new,ok=QInputDialog.getText(self,'重命名标签','新标签名称',text=old)
+        if ok:self.guard(lambda:self.service.rename_tag(old,new));self.refresh()
+    def remove_selected_tag(self):
+        selected=self.tag_filter.selectedItems()
+        if len(selected)!=1:
+            QMessageBox.information(self,'删除标签','请只选择一个标签。');return
+        tag=selected[0].text()
+        if QMessageBox.question(self,'删除标签',f'从所有文献中移除“{tag}”标签？文献与笔记会保留。')==QMessageBox.StandardButton.Yes:
+            self.guard(lambda:self.service.rename_tag(tag,None));self.refresh()
+    def clear_filters(self):
+        self.search.clear();self.tag_filter.clearSelection();self.include_children.setChecked(False)
     def import_pdf(self):
         paths,_=QFileDialog.getOpenFileNames(self,'导入本地文献','','PDF (*.pdf)')
-        for p in paths:self.guard(lambda p=p:self.service.import_pdf(p))
+        collection=self.current_collection()
+        for p in paths:
+            document=self.guard(lambda p=p:self.service.import_pdf(p))
+            if document and collection:self.guard(lambda:self.service.set_membership(document['id'],collection))
         self.refresh()
     def save_doc(self):
         d=self.selected()

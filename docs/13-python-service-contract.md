@@ -29,3 +29,9 @@
 任务字段：`id,documentId,engine,state,createdAt,error,artifacts,outputDir`；状态为 queued/running/completed/failed。输出目录固定存入任务记录，缓存变更只影响新任务；旧任务结果仍可读。缓存目录必须为本机绝对路径、可创建且可写，并且在源文献对象库之外。
 
 本地追踪仅记录事件类别、结果和时间；不回传、不包含论文正文或密钥。无关键词文献搜索、代写、科学真伪判断、多人 SaaS 或云同步。
+
+## 集合与标签
+
+数据库 v2：`desktop_collections` 自引用父集合；`desktop_memberships` 为文献/集合多对多关系。v1 升级前使用 SQLite backup 保存 `library-before-v2.sqlite3`，原文对象不迁移。
+
+服务新增 `list_collections/create_collection/update_collection/delete_collection`、`document_collections/set_membership`、`list_tags/rename_tag` 与 `search_documents`。集合删除级联子集合和成员关系，文献/附件保留；成员移除只删除关系。树移动拒绝循环。搜索支持 text、collection_id、unfiled、tags（交集）、include_descendants。

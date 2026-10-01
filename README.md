@@ -21,7 +21,7 @@
 
 ## 核心功能
 
-- **本地文献库**：PDF 导入、文件去重、元数据、标签与笔记，文献管理对标 Zotero。
+- **本地文献库**：集合与子集合、PDF 导入、文件去重、标签筛选与笔记，文献管理对标 Zotero。
 - **双引擎翻译**：集成 [BabelDOC](https://github.com/funstory-ai/BabelDOC) 与 [PDFMathTranslate](https://github.com/PDFMathTranslate/PDFMathTranslate)，原文与译文分开保存。
 - **双语阅读**：原文与译文并排显示，在桌面内完成阅读。
 - **自选模型**：支持 DeepSeek 等兼容 API，自动获取可用模型，也可手动填写。
@@ -92,7 +92,8 @@ python -m polyscholar
 - [x] PDF 导入、去重、元数据与笔记
 - [x] 模型配置与模型列表获取
 - [x] 双引擎任务适配、译文导出与缓存目录
-- [ ] Zotero 式集合、附件、高级检索与回收站
+- [x] 集合与子集合、多集合归类、标签联合筛选
+- [ ] 多附件、高级检索与回收站
 - [ ] 带原文定位的证据摘要
 - [ ] 图中文字注释与段落对齐
 - [ ] CSL 引文样式排版

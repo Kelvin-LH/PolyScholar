@@ -12,6 +12,7 @@ import stat
 import threading
 from urllib.parse import urlsplit
 import uuid
+from .library import CollectionLibrary, normalize_tags
 
 MAX_PDF = 100 * 1024 * 1024
 SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeldoc',
@@ -20,7 +21,7 @@ SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeld
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
 
-class LocalStore:
+class LocalStore(CollectionLibrary):
     def __init__(self, root):
         self.root = Path(root).absolute()
         self.objects = self.root / 'objects'
@@ -29,15 +30,33 @@ class LocalStore:
             self.root.chmod(0o700)
         self.lock = threading.RLock()
         with self.connection() as db:
-            if db.execute('PRAGMA user_version').fetchone()[0] > 1:
+            version = db.execute('PRAGMA user_version').fetchone()[0]
+            if version > 2:
                 raise ValueError('本地数据库来自更新版本，请升级应用。')
+            if version == 1:
+                backup = self.root / 'library-before-v2.sqlite3'
+                if not backup.exists():
+                    target = sqlite3.connect(backup)
+                    try:
+                        db.backup(target)
+                    finally:
+                        target.close()
+                    if os.name == 'posix':
+                        backup.chmod(0o600)
             db.executescript('''
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS desktop_documents(id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS desktop_settings(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS desktop_jobs(id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES desktop_documents(id), state TEXT NOT NULL, data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS desktop_audit(sequence INTEGER PRIMARY KEY AUTOINCREMENT, point TEXT NOT NULL, outcome TEXT NOT NULL, created_at TEXT NOT NULL);
-                PRAGMA user_version=1;
+                CREATE TABLE IF NOT EXISTS desktop_collections(id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                    parent_id TEXT REFERENCES desktop_collections(id) ON DELETE CASCADE);
+                CREATE UNIQUE INDEX IF NOT EXISTS desktop_collection_names ON desktop_collections(COALESCE(parent_id,''),name);
+                CREATE TABLE IF NOT EXISTS desktop_memberships(document_id TEXT NOT NULL REFERENCES desktop_documents(id) ON DELETE CASCADE,
+                    collection_id TEXT NOT NULL REFERENCES desktop_collections(id) ON DELETE CASCADE,
+                    PRIMARY KEY(document_id,collection_id));
+                CREATE INDEX IF NOT EXISTS desktop_memberships_collection ON desktop_memberships(collection_id);
+                PRAGMA user_version=2;
             ''')
         for job in self.list_jobs():
             if job['state'] in ('queued', 'running'):
@@ -113,8 +132,7 @@ class LocalStore:
             raise ValueError('文献修改字段无效。')
         for key, value in patch.items():
             if key == 'tags':
-                if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
-                    raise ValueError('标签必须是文本列表。')
+                patch = {**patch, 'tags': normalize_tags(value)}
             elif not isinstance(value, str):
                 raise ValueError('文献元数据必须是文本。')
         with self.lock:
