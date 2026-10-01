@@ -53,7 +53,8 @@ class WorkerContractTests(unittest.TestCase):
     def test_failure_cli_has_no_sensitive_traceback(self):
         body = {**self.body, 'endpoint': 'https://name:never-echo-this-secret@example.org'}
         result = subprocess.run([sys.executable, '-I', str(ROOT/'integrations/job_worker.py')],
-                                input=json.dumps(body), capture_output=True, text=True, timeout=10)
+                                input=json.dumps(body), capture_output=True, text=True, timeout=10,
+                                env={**os.environ, 'PYTHONIOENCODING': 'ascii'})
         event = json.loads(result.stdout)
         self.assertEqual(event['error_code'], 'invalid_request')
         self.assertEqual(result.returncode, 1)

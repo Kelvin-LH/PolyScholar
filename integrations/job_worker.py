@@ -81,7 +81,7 @@ def parse_request(raw):
 def emit(job_id, event, status, **extra):
     body = {'protocol_version': 1, 'job_id': job_id, 'event': event, 'status': status,
             'progress': None, 'cost': None, 'usage': None, **extra}
-    print(json.dumps(body, ensure_ascii=False, allow_nan=False), flush=True)
+    print(json.dumps(body, ensure_ascii=True, allow_nan=False), flush=True)
 
 def interrupted(_signum, _frame):
     raise KeyboardInterrupt()

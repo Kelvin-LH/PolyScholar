@@ -7,7 +7,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
     QVBoxLayout, QLabel, QPushButton, QListWidget, QStackedWidget, QLineEdit,
     QComboBox, QFileDialog, QMessageBox, QFormLayout, QTextEdit, QTableWidget,
-    QTableWidgetItem, QHeaderView, QSplitter, QScrollArea, QFrame)
+    QTableWidgetItem, QHeaderView, QSplitter, QScrollArea, QFrame, QInputDialog)
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
 
@@ -72,7 +72,7 @@ class Window(QMainWindow):
         for k,name in [('title','标题'),('authors','作者'),('doi','DOI'),('year','年份'),('tags','标签')]:
             e=QLineEdit();self.fields[k]=e;f.addRow(name,e)
         self.notes=QTextEdit();self.notes.setPlaceholderText('本地笔记');f.addRow('笔记',self.notes)
-        f.addRow(self.button('保存条目',self.save_doc,True));f.addRow(self.button('阅读文献',self.open_original));f.addRow(self.button('移至删除',self.delete_doc))
+        f.addRow(self.button('保存条目',self.save_doc,True));f.addRow(self.button('阅读文献',self.open_original));f.addRow(self.button('删除条目',self.delete_doc))
         split.addWidget(inspector);split.setSizes([740,320]);l.addWidget(split,1)
         self.empty=QLabel('还没有文献，请先导入本地 PDF。');self.empty.setObjectName('muted');l.addWidget(self.empty)
     def selected(self):
@@ -128,7 +128,7 @@ class Window(QMainWindow):
         load(0,data)
         completed=[j for j in self.jobs if j.get('documentId')==d['id'] and j.get('state')=='completed' and j.get('artifacts')]
         if completed:
-            raw=self.guard(lambda:self.service.read_artifact_pdf(completed[-1]['id'],0))
+            raw=self.guard(lambda:self.service.read_artifact_pdf(completed[0]['id'],0))
             if raw:load(1,raw)
         self.pdf_title.setText(d['title']);self.nav.setCurrentRow(1)
     def tasks(self):
@@ -149,8 +149,13 @@ class Window(QMainWindow):
                 self.job_table.setCellWidget(i,3,self.button('导出译文',lambda checked=False,j=j:self.export_translation(j)))
             elif j.get('state')=='failed':self.job_table.setItem(i,3,QTableWidgetItem(j.get('errorCode') or '请检查模型设置'))
     def export_translation(self,j):
-        p,_=QFileDialog.getSaveFileName(self,'导出翻译结果','translation.pdf','PDF (*.pdf)')
-        if p:self.guard(lambda:self.service.export_translation(j['id'],0,p))
+        index=0
+        if len(j['artifacts'])>1:
+            name,ok=QInputDialog.getItem(self,'选择导出文件','翻译结果',j['artifacts'],0,False)
+            if not ok:return
+            index=j['artifacts'].index(name)
+        p,_=QFileDialog.getSaveFileName(self,'导出翻译结果',j['artifacts'][index],'PDF (*.pdf)')
+        if p:self.guard(lambda:self.service.export_translation(j['id'],index,p))
     def summary(self):
         l=self.page('证据摘要','摘要应关联原文页码和段落；此功能尚未实现。')
         l.addStretch();label=QLabel('证据定位与模型摘要正在研发\n暂不提供自动生成结果');label.setAlignment(Qt.AlignmentFlag.AlignCenter);l.addWidget(label);l.addStretch()

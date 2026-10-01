@@ -233,11 +233,14 @@ class LocalService:
                     pass
                 if child.stdout:
                     child.stdout.close()
-            with self._lock:
-                self._children.pop(job['id'], None)
-                self._threads.pop(job['id'], None)
-            self.store.put_job(job)
-            self.store.audit('artifact_exported', 'succeeded' if job['state'] == 'completed' else 'failed')
+            # Retain the thread until all database writes close, so shutdown can join it.
+            try:
+                self.store.put_job(job)
+                self.store.audit('translation_finished', 'succeeded' if job['state'] == 'completed' else 'failed')
+            finally:
+                with self._lock:
+                    self._children.pop(job['id'], None)
+                    self._threads.pop(job['id'], None)
 
     @staticmethod
     def _stop(child):
