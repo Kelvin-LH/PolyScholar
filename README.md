@@ -28,7 +28,7 @@
 - **文件导出**：导出译文 PDF，以及 BibTeX、RIS、CSL-JSON 文献元数据。
 - **个人桌面**：Python + PySide6 + SQLite，无需服务器或账户。发行包自带 Python，缓存目录可调整。
 
-文献与笔记保存在本机。联网用于模型 API、DOI 元数据查询及模型/字体下载；模型 API 会接收所选翻译内容。[数据边界 →](docs/09-local-and-network-scope.md)
+文献与笔记保存在本机。联网用于模型 API、DOI 元数据查询及模型/字体下载；翻译时会向模型 API 发送论文内容。[数据边界 →](docs/09-local-and-network-scope.md)
 
 ## 界面预览
 
@@ -103,7 +103,7 @@ macOS arm64 开发包已通过启动检查。真实 API 翻译与三平台安装
 
 ## 文档
 
-[产品需求](docs/02-requirements.md) · [架构设计](docs/03-architecture.md) · [翻译与 AI](docs/04-document-and-llm.md) · [界面规范](docs/10-ui-spec.md) · [研发计划](docs/11-development-plan.md) · [Zotero 对标](docs/12-zotero-parity.md)
+[产品需求](docs/02-requirements.md) · [架构设计](docs/03-architecture.md) · [翻译与 AI](docs/04-document-and-llm.md) · [界面规范](docs/10-ui-spec.md) · [研发计划](docs/11-development-plan.md) · [Zotero 对标](docs/12-zotero-parity.md) · [自查整改](docs/14-review-remediation.md)
 
 ## 参与贡献
 
