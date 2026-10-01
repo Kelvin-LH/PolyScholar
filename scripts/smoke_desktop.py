@@ -21,6 +21,7 @@ def main():
         painter = QPainter(writer)
         painter.drawText(100, 100, 'Synthetic PDF for local UI validation')
         painter.end()
+        del painter, writer  # Release the PDF file handle before import/Windows cleanup.
         service = LocalService(data_dir=root / 'data', resources_dir=root / 'resources')
         window = Window(service)
         try:
