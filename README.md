@@ -120,8 +120,6 @@ python3 -m unittest discover -s tests -v
 
 [![Star History Chart](https://api.star-history.com/svg?repos=Kelvin-LH/PolyScholar&type=Date)](https://www.star-history.com/#Kelvin-LH/PolyScholar&Date)
 
-图表由 [Star History](https://github.com/star-history/star-history) 根据 GitHub 公开 Star 数据生成；新仓库数据较少或服务缓存时，曲线可能暂时为空。
-
 ## English
 
 PolyScholar is a personal, local desktop workspace for bilingual research reading and reference management. The application is being developed entirely in Python with PySide6 and SQLite, integrating BabelDOC and PDFMathTranslate in isolated runtimes. Packaged releases will include Python. Design images show the intended UI; production installers and full feature parity with Zotero are not available yet. Licensed under AGPL-3.0-only.
