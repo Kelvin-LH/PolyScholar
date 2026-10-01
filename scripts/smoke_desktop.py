@@ -3,13 +3,22 @@
 from pathlib import Path
 import sys
 import tempfile
+import time
+import threading
+import json
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from unittest.mock import patch
-from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog
+from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QDialog
 from PySide6.QtGui import QPdfWriter, QPainter
 from PySide6.QtTest import QTest
 from polyscholar.app import Window, STYLE
 from polyscholar.service import LocalService
+
+def wait_until(predicate, timeout=5):
+    deadline=time.monotonic()+timeout
+    while not predicate() and time.monotonic()<deadline:
+        QTest.qWait(10)
+    assert predicate(), 'Asynchronous GUI operation did not complete'
 
 def main():
     app = QApplication([])
@@ -29,6 +38,8 @@ def main():
             app.processEvents()
             with patch.object(QFileDialog, 'getOpenFileNames', return_value=([str(source)], '')):
                 window.import_pdf()
+                assert not window.import_button.isEnabled()
+                wait_until(lambda:window.io_worker is None)
             assert len(window.docs) == 1
             window.document_list.setCurrentRow(0)
             window.fields['title'].setText('Local reading check')
@@ -46,6 +57,8 @@ def main():
             assert window.document_list.count()==0
             with patch.object(QFileDialog, 'getOpenFileNames', return_value=([str(source)], '')):
                 window.import_pdf()
+                assert not window.import_button.isEnabled()
+                wait_until(lambda:window.io_worker is None)
             assert window.document_list.count()==1
             window.document_list.setCurrentRow(0)
             with patch.object(QInputDialog, 'getText', return_value=('方法', True)):
@@ -68,38 +81,79 @@ def main():
             window.collection_tree.setCurrentItem(window.collection_tree.topLevelItem(0))
             window.document_list.setCurrentRow(0)
             window.open_original()
-            app.processEvents()
+            wait_until(lambda:window.io_worker is None and window.pdf_docs[0].pageCount()==1)
             assert window.pdf_docs[0].pageCount() == 1
+            # A completed task with two local artifacts updates the GUI via service events.
+            job=service.store.new_job(saved['id'],'babeldoc')
+            output=Path(job['outputDir']);output.mkdir(parents=True)
+            for name in ('mono.pdf','dual.pdf'):(output/name).write_bytes(source.read_bytes())
+            job.update(state='completed',artifacts=['mono.pdf','dual.pdf'],progress=25,usage={'total_tokens':42})
+            service.store.put_job(job)
+            thread=threading.Thread(target=service._notify_job,args=(job,));thread.start();thread.join()
+            wait_until(lambda:window.reader_result.count()==3)
+            assert window.job_table.item(0,3).text()=='25%'
+            assert '42' in window.job_table.item(0,4).text()
+            window.reader_result.setCurrentIndex(2)
+            wait_until(lambda:window.io_worker is None and window.pdf_docs[1].pageCount()==1)
+            assert window.reader_result.currentData()==(job['id'],1)
+            window.pages.setText('1-2')
+            assert '1-2' in window.send_boundary.text() and '整篇 PDF' in window.send_boundary.text()
             window.nav.setCurrentRow(5)
             window.cache.setText(str(root / 'custom-cache'))
+            window.timeout.setValue(1200)
             window.key.setText('synthetic-session-key')
             window.save_settings()
             assert Path(service.get_settings()['cachePath']) == (root / 'custom-cache').resolve()
             assert window.key.text() == ''
+            assert service.get_settings()['timeoutSeconds']==1200
             with patch.object(service, 'list_models', return_value=['synthetic-a', 'synthetic-b']):
                 window.fetch_models()
                 assert window.model_worker.wait(2000)
                 QTest.qWait(20)
                 assert window.model.count() == 2
                 assert window.fetch_button.isEnabled()
+            second=root/'second.pdf';second.write_bytes(source.read_bytes()+b'\n% Second local document\n')
+            service.import_pdf(second)
+            window.task_doc.setCurrentIndex(window.task_doc.findData(saved['id']))
+            window.refresh()
+            assert window.task_doc.currentData()==saved['id']
+            for index in range(window.citation_items.count()):
+                item=window.citation_items.item(index)
+                item.setSelected(item.data(256)==saved['id'])
+            for label, marker in [('BibTeX','@article'),('RIS','TY  -'),('CSL-JSON','Local reading check')]:
+                window.citation_format.setCurrentText(label)
+                assert marker in window.citation_preview.toPlainText()
             exported = root / 'references.json'
             with patch.object(QFileDialog, 'getSaveFileName', return_value=(str(exported), '')):
                 window.export_citations()
             assert 'Local reading check' in exported.read_text(encoding='utf-8')
+            assert len(json.loads(exported.read_text(encoding='utf-8')))==1
+            diagnostics=root/'diagnostics.json'
+            with patch.object(QDialog,'exec',return_value=QDialog.DialogCode.Accepted), patch.object(QFileDialog,'getSaveFileName',return_value=(str(diagnostics),'')):
+                window.preview_diagnostics()
+            assert 'schemaVersion' in json.loads(diagnostics.read_text(encoding='utf-8'))
+            assert 'synthetic-session-key' not in diagnostics.read_text(encoding='utf-8')
             window.resize(1024, 700)
             app.processEvents()
             assert window.endpoint.height() >= 40
-            window.close()
+            original_read=service.read_pdf
+            def slow_read(identifier):
+                time.sleep(0.05);return original_read(identifier)
+            with patch.object(service,'read_pdf',side_effect=slow_read):
+                window.open_original()
+                window.close()
+                assert not window._closed
+                wait_until(lambda:window._closed)
             reopened = LocalService(data_dir=root / 'data', resources_dir=root / 'resources')
             try:
-                assert reopened.list_documents()[0]['notes'] == 'A private local note'
+                assert next(d for d in reopened.list_documents() if d['id']==saved['id'])['notes'] == 'A private local note'
                 assert reopened._key == ''
             finally:
                 reopened.close()
         finally:
             window.close()
             service.close()
-    print('Native GUI: import, edit, collections, tag filtering, PDF reading, model selection, cache and export passed')
+    print('Native GUI: import, edit, collections, tag filtering, PDF reading, task events, artifact selection, timeout, citation formats, export and safe busy close passed')
 
 if __name__ == '__main__':
     main()

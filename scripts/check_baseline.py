@@ -10,8 +10,6 @@ def main():
                      'polyscholar/app.py', 'integrations/engines.py']:
         assert (ROOT / required).is_file(), required
     for path in [ROOT / 'README.md', ROOT / 'CONTRIBUTING.md', ROOT / 'SECURITY.md', ROOT / 'THIRD_PARTY_NOTICES.md', *sorted((ROOT / 'docs').glob('*.md'))]:
-        if '.git' in path.parts or 'licenses' in path.parts:
-            continue
         for target in re.findall(r'\]\(([^)]+)\)', path.read_text(encoding='utf-8')):
             if '://' in target or target.startswith('#'):
                 continue
@@ -21,7 +19,7 @@ def main():
     assert con.execute('PRAGMA foreign_key_check').fetchall() == []
     assert con.execute('PRAGMA user_version').fetchone()[0] == 1
     con.close()
-    print('Baseline: local links and SQLite migration passed')
+    print('Baseline: local links and reference DocumentIR schema passed (not runtime migration)')
 
 if __name__ == '__main__':
     main()

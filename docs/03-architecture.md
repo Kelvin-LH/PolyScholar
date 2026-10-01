@@ -42,6 +42,8 @@ flowchart TD
 
 ## 领域与数据
 
+以下为目标领域模型。当前运行时 SQLite v3 与未来 DocumentIR 参考设计的差异见 [数据模型状态](../schemas/README.md)；块级证据与摘要尚未实现。
+
 library 负责集合/子集合、多集合成员、类型化条目/作者、标签、附件、笔记、检索和恢复；逐步对标 [Zotero 矩阵](12-zotero-parity.md)。基础 PDF 列表不是完整文献管理。
 
 document 负责 DocumentIR、阅读顺序、段落/图文 OCR 框和不可翻译对象；translation 保存译文版本、术语、模型与保护 token 校验；summary 保存结论与证据；citation 保存标准元数据、样式版本/哈希与交换格式损失；provider 负责请求范围/授权字段和错误；provenance 保存最小本地事件；compliance 提供关于/许可证/源码入口，不建立授权服务器。

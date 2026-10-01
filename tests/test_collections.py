@@ -12,6 +12,7 @@ class CollectionTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name)
         self.store=LocalStore(self.root/'library')
+        self.addCleanup(self.store.close)
         self.source=self.root/'sample.pdf';self.source.write_bytes(b'%PDF-1.7 sample')
         self.document=self.store.import_pdf(self.source)
 
@@ -24,7 +25,9 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(self.store.search_documents(collection_id=first['id']),[])
         self.assertEqual(self.store.search_documents(collection_id=second['id'])[0]['id'],self.document['id'])
         self.assertTrue(self.store.object_path(self.document).exists())
+        self.store.close()
         reopened=LocalStore(self.store.root)
+        self.addCleanup(reopened.close)
         self.assertEqual(reopened.document_collections(self.document['id']),[second['id']])
 
     def test_three_levels_move_cycle_rejected_and_delete_branch_keeps_documents(self):
@@ -76,7 +79,9 @@ class CollectionTests(unittest.TestCase):
         original=self.store.object_path(self.document).read_bytes()
         with self.store.connection() as db:
             db.executescript('DROP TABLE desktop_memberships;DROP TABLE desktop_collections;PRAGMA user_version=1;')
+        self.store.close()
         reopened=LocalStore(self.store.root)
+        self.addCleanup(reopened.close)
         backup=self.store.root/'library-before-v2.sqlite3'
         self.assertTrue(backup.exists())
         db=sqlite3.connect(backup)
@@ -86,6 +91,6 @@ class CollectionTests(unittest.TestCase):
         finally:db.close()
         self.assertEqual(reopened.document(self.document['id'])['title'],self.document['title'])
         self.assertEqual(hashlib.sha256(reopened.read_pdf(self.document['id'])).digest(),hashlib.sha256(original).digest())
-        with reopened.connection() as db:self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],2)
+        with reopened.connection() as db:self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],3)
         reopened.create_collection('After migration')
         self.assertEqual(len(reopened.list_collections()),1)

@@ -13,28 +13,55 @@ import threading
 from urllib.parse import urlsplit
 import uuid
 from .library import CollectionLibrary, normalize_tags
+from .exports import atomic_export
+from .instance import LibraryLock
+
+AUDIT_POINTS = frozenset({'document_imported','document_deleted','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported'})
 
 MAX_PDF = 100 * 1024 * 1024
 SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeldoc',
-                pythonPath='', cachePath='', sourceLanguage='en', targetLanguage='zh', doiEnabled=False)
+                pythonPath='', cachePath='', sourceLanguage='en', targetLanguage='zh', doiEnabled=False, timeoutSeconds=600)
 
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
 
 class LocalStore(CollectionLibrary):
     def __init__(self, root):
-        self.root = Path(root).absolute()
-        self.objects = self.root / 'objects'
-        self.objects.mkdir(parents=True, exist_ok=True)
+        self.root = Path(root).resolve()
+        self.root.mkdir(parents=True, exist_ok=True)
         if os.name == 'posix':
             self.root.chmod(0o700)
         self.lock = threading.RLock()
+        self._instance = LibraryLock(self.root)
+        try:
+            self._initialize()
+        except Exception:
+            self.close()
+            raise
+
+    def close(self):
+        with self.lock:
+            self._instance.close()
+
+    def _initialize(self):
+        self.objects = self.root / 'objects'
+        self.objects.mkdir(exist_ok=True)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version > 2:
+            if version > 3:
                 raise ValueError('本地数据库来自更新版本，请升级应用。')
             if version == 1:
                 backup = self.root / 'library-before-v2.sqlite3'
+                if not backup.exists():
+                    target = sqlite3.connect(backup)
+                    try:
+                        db.backup(target)
+                    finally:
+                        target.close()
+                    if os.name == 'posix':
+                        backup.chmod(0o600)
+            if version in (1,2):
+                backup = self.root / 'library-before-v3.sqlite3'
                 if not backup.exists():
                     target = sqlite3.connect(backup)
                     try:
@@ -56,8 +83,14 @@ class LocalStore(CollectionLibrary):
                     collection_id TEXT NOT NULL REFERENCES desktop_collections(id) ON DELETE CASCADE,
                     PRIMARY KEY(document_id,collection_id));
                 CREATE INDEX IF NOT EXISTS desktop_memberships_collection ON desktop_memberships(collection_id);
-                PRAGMA user_version=2;
+                PRAGMA user_version=3;
             ''')
+        values = ','.join("'"+point+"'" for point in sorted(AUDIT_POINTS))
+        with self.connection() as db:
+            for action in ('INSERT', 'UPDATE'):
+                db.execute(f"CREATE TRIGGER IF NOT EXISTS desktop_audit_validate_{action.lower()} BEFORE {action} ON desktop_audit "
+                           f"WHEN NEW.point NOT IN ({values}) OR NEW.outcome NOT IN ('succeeded','failed') "
+                           "BEGIN SELECT RAISE(ABORT, 'Invalid audit event'); END")
         for job in self.list_jobs():
             if job['state'] in ('queued', 'running'):
                 job.update(state='failed', error='上次退出时任务未完成，请重新提交；远程请求可能已计费。')
@@ -65,6 +98,8 @@ class LocalStore(CollectionLibrary):
 
     @contextmanager
     def connection(self):
+        if self._instance.fd is None:
+            raise ValueError('文献库已关闭，请重新打开应用。')
         db = sqlite3.connect(self.root / 'library.sqlite3', timeout=10)
         db.execute('PRAGMA foreign_keys=ON')
         try:
@@ -74,6 +109,8 @@ class LocalStore(CollectionLibrary):
             db.close()
 
     def audit(self, point, outcome='succeeded'):
+        if point not in AUDIT_POINTS or outcome not in ('succeeded','failed'):
+            raise ValueError('无效的本地审计事件。')
         with self.connection() as db:
             db.execute('INSERT INTO desktop_audit(point,outcome,created_at) VALUES(?,?,?)', (point, outcome, timestamp()))
 
@@ -106,9 +143,15 @@ class LocalStore(CollectionLibrary):
         with self.lock:
             existing = next((d for d in self.list_documents() if d['sha256'] == digest), None)
             if existing:
+                sources=existing.get('sourcePaths',[])
+                source_path=str(source.resolve())
+                if source_path not in sources:
+                    existing['sourcePaths']=[*sources,source_path]
+                    with self.connection() as db:
+                        db.execute('UPDATE desktop_documents SET data=? WHERE id=?',(json.dumps(existing,ensure_ascii=False),existing['id']))
                 return existing
             document = dict(id=str(uuid.uuid4()), title=source.stem or '未命名文献', authors='', doi='', year='', tags=[], notes='',
-                            sha256=digest, filename=source.name, sizeBytes=len(data), createdAt=timestamp())
+                            sha256=digest, filename=source.name, sizeBytes=len(data), createdAt=timestamp(),sourcePaths=[str(source.resolve())])
             target = self.object_path(document)
             if not target.exists():
                 temporary = self.objects / (str(uuid.uuid4()) + '.tmp')
@@ -135,6 +178,8 @@ class LocalStore(CollectionLibrary):
                 patch = {**patch, 'tags': normalize_tags(value)}
             elif not isinstance(value, str):
                 raise ValueError('文献元数据必须是文本。')
+            elif len(value.encode('utf-8')) > 65536:
+                raise ValueError('每个文献元数据字段不能超过 64 KiB。')
         with self.lock:
             document = self.document(document_id)
             document.update(patch)
@@ -157,7 +202,7 @@ class LocalStore(CollectionLibrary):
                 referenced = db.execute('SELECT 1 FROM desktop_documents WHERE sha256=?', (document['sha256'],)).fetchone()
             if not referenced:
                 path = self.object_path(document)
-                if os.name == 'nt':
+                if os.name == 'nt' and path.exists():
                     path.chmod(stat.S_IWRITE)
                 path.unlink(missing_ok=True)
             import shutil
@@ -173,8 +218,11 @@ class LocalStore(CollectionLibrary):
 
     @staticmethod
     def read_bounded_pdf(path):
-        with Path(path).open('rb') as stream:
-            data = stream.read(MAX_PDF + 1)
+        try:
+            with Path(path).open('rb') as stream:
+                data = stream.read(MAX_PDF + 1)
+        except OSError:
+            raise ValueError('PDF 不存在、已被清理或不可读取。') from None
         if len(data) > MAX_PDF or not data.startswith(b'%PDF-'):
             raise ValueError('PDF 无效或超过 100 MiB。')
         return data
@@ -192,7 +240,26 @@ class LocalStore(CollectionLibrary):
         path = path.resolve()
         if path.is_relative_to(self.objects.resolve()):
             raise ValueError('缓存不能位于源文献对象库。')
-        probe = path / ('.polyscholar-write-' + str(uuid.uuid4()))
+        if os.name == 'posix':
+            # A private child is replaceable beneath an untrusted writable parent.
+            # Root-owned sticky /tmp remains safe for an owned child; shared 0777
+            # directories without sticky protection must not hold private outputs.
+            for ancestor in (path, *path.parents):
+                info = ancestor.stat()
+                if info.st_uid not in (0, os.getuid()):
+                    raise ValueError('缓存路径由其他用户控制，请选择自己的本地文件夹。')
+                if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
+                    raise ValueError('缓存路径允许其他用户替换文件，请选择非共享的本地文件夹。')
+        # Only tighten our own subtree; never chmod a user-selected shared folder.
+        jobs = path / 'jobs'
+        if jobs.is_symlink():
+            raise ValueError('缓存任务目录不能是符号链接。')
+        jobs.mkdir(mode=0o700, exist_ok=True)
+        if os.name == 'posix':
+            if jobs.stat().st_uid != os.getuid():
+                raise ValueError('缓存任务目录不属于当前用户。')
+            jobs.chmod(0o700)
+        probe = jobs / ('.polyscholar-write-' + str(uuid.uuid4()))
         try:
             with probe.open('xb'):
                 pass
@@ -206,7 +273,10 @@ class LocalStore(CollectionLibrary):
             raise ValueError('设置字段无效；不得保存 API 密钥。')
         merged = {**self.get_settings(), **settings}
         for key, value in merged.items():
-            if key == 'doiEnabled':
+            if key == 'timeoutSeconds':
+                if type(value) is not int or not 1 <= value <= 86400:
+                    raise ValueError('任务超时必须为 1 到 86400 秒。')
+            elif key == 'doiEnabled':
                 if type(value) is not bool:
                     raise ValueError('DOI 开关无效。')
             elif not isinstance(value, str) or len(value) > 16384 or any(ord(c) < 32 for c in value):
@@ -247,7 +317,7 @@ class LocalStore(CollectionLibrary):
         identifier = str(uuid.uuid4())
         output = self.prepare_cache(self.get_settings()['cachePath']) / 'jobs' / identifier
         job = dict(id=identifier, documentId=document_id, engine=engine, state='queued', createdAt=timestamp(),
-                   error=None, artifacts=[], outputDir=str(output))
+                   error=None, artifacts=[], outputDir=str(output), timeoutSeconds=self.get_settings()['timeoutSeconds'])
         with self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
             if db.execute("SELECT 1 FROM desktop_jobs WHERE state IN ('queued','running')").fetchone():
@@ -267,25 +337,32 @@ class LocalStore(CollectionLibrary):
         name = job['artifacts'][artifact_index]
         if not isinstance(name, str) or Path(name).name != name or name in ('.', '..') or '/' in name or '\\' in name:
             raise ValueError('产物名称无效。')
-        root = self.output_path(job).resolve(strict=True)
-        path = (root / name).resolve(strict=True)
+        try:
+            root = self.output_path(job).resolve(strict=True)
+            candidate = root / name
+            if candidate.is_symlink():
+                raise ValueError('产物不能是符号链接。')
+            path = candidate.resolve(strict=True)
+        except OSError:
+            raise ValueError('任务产物不存在或已被清理。') from None
         if not path.is_relative_to(root) or path.suffix.lower() != '.pdf' or not path.is_file():
             raise ValueError('无效 PDF 产物。')
         if path.stat().st_size > MAX_PDF:
             raise ValueError('译文超过 100 MiB。')
         return path
 
+    def write_export(self, destination, data, extra_protected=()):
+        documents=self.list_documents()
+        originals=[path for document in documents for path in document.get('sourcePaths',[])]
+        protected=[*self.objects.glob('*.pdf'), *self.root.glob('*.sqlite3*')]
+        for job in self.list_jobs():
+            protected.extend(self.output_path(job).glob('*.pdf'))
+        return atomic_export(destination,data,
+            protected_roots=[self.root,*extra_protected,*[self.output_path(job) for job in self.list_jobs()]],
+            protected_files=protected, original_paths=originals,original_hashes={document['sha256'] for document in documents})
+
     def export_translation(self, job_id, artifact_index, destination):
-        source = self.artifact_path(job_id, artifact_index)
-        destination = Path(destination)
-        if not destination.is_absolute():
-            raise ValueError('导出位置必须是本机绝对路径。')
-        target = destination.resolve(strict=True) if destination.exists() else destination.parent.resolve(strict=True) / destination.name
-        if target == source or target.is_relative_to(self.objects.resolve()):
-            raise ValueError('不能覆盖内部译文或源文献对象库。')
-        if target.exists() and (os.path.samefile(target, source) or any(os.path.samefile(target, self.object_path(d)) for d in self.list_documents())):
-            raise ValueError('不能覆盖内部译文或源文献硬链接。')
-        data = self.read_bounded_pdf(source)
-        with target.open('wb') as stream:
-            stream.write(data)
+        source=self.artifact_path(job_id,artifact_index)
+        data=self.read_bounded_pdf(source)
+        self.write_export(destination,data)
         self.audit('artifact_exported')

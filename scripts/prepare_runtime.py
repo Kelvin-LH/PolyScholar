@@ -10,9 +10,13 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import sys
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from integrations.engines import VERSIONS, limited_environment
+
 RELEASE = '20260929'
 PYTHON_VERSION = '3.12.14'
 # Pinned official GitHub release asset digests, fetched with gh api on 2026-10-02.
@@ -35,9 +39,7 @@ def binary(root):
     return root / ('python.exe' if os.name == 'nt' else 'bin/python3')
 
 def clean_environment():
-    allowed = ('PATH', 'HOME', 'USERPROFILE', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP',
-               'LANG', 'LC_ALL', 'SSL_CERT_FILE', 'SSL_CERT_DIR')
-    return {key: os.environ[key] for key in allowed if key in os.environ}
+    return limited_environment()
 
 def unpack(archive, destination):
     # Validate members and link targets even on maintainer Python versions before tar filters.
@@ -52,14 +54,15 @@ def unpack(archive, destination):
                 target = (destination / item.name).parent / item.linkname if item.issym() else destination / item.linkname
                 if not target.resolve().is_relative_to(base):
                     raise ValueError('Runtime archive link escapes destination')
-        tar.extractall(destination)
+        tar.extractall(destination, filter='data')
 
 def verify(runtime, engine, work):
     py = binary(runtime).absolute()
     env = clean_environment()
     # PATH deliberately excludes all host interpreters and user-site directories.
     env['PATH'] = str(runtime/'bin') if os.name != 'nt' else str(runtime)
-    package, expected, module = ('babeldoc', '0.6.4', 'babeldoc.main') if engine == 'babeldoc' else ('pdf2zh', '1.9.11', 'pdf2zh.pdf2zh')
+    package, expected = VERSIONS[engine]
+    module = 'babeldoc.main' if engine == 'babeldoc' else 'pdf2zh.pdf2zh'
     code = ('import importlib.metadata,sys; '
             'assert sys.version_info[:2]==(3,12); '
             'assert importlib.metadata.version(' + repr(package) + ')=='+repr(expected)+'; '

@@ -58,6 +58,7 @@ def validate(req):
     if req.output.exists() or req.output.is_symlink():
         raise ValueError('Use a new output directory to prevent overwriting')
     parsed = urlsplit(req.endpoint)
+    _ = parsed.port  # Reject malformed and out-of-range ports in every entry point.
     local = parsed.hostname in {'localhost', '127.0.0.1', '::1'}
     if (parsed.scheme != 'https' and not (local and parsed.scheme == 'http')) or not parsed.hostname:
         raise ValueError('Endpoint must use HTTPS or explicit loopback HTTP')
@@ -112,8 +113,8 @@ def private_config(req, directory, api_key):
         body = json.dumps({'translators': [{'name': 'openai', 'envs': {
             'OPENAI_BASE_URL': req.endpoint, 'OPENAI_API_KEY': api_key,
             'OPENAI_MODEL': req.model}}]})
-    with path.open('x', encoding='utf-8') as stream:
-        os.chmod(path, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
         stream.write(body)
     return path
 
@@ -122,7 +123,10 @@ def limited_environment():
     # Do not copy API credentials or provider config from the parent environment.
     # Keep the genuine OS home; never repurpose HOME or CODEX_HOME.
     allowed = ('PATH', 'HOME', 'USERPROFILE', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP',
-               'LANG', 'LC_ALL', 'SSL_CERT_FILE', 'SSL_CERT_DIR')
+               'LANG', 'LC_ALL', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+               # OS configuration/cache discovery and native subprocess resolution.
+               'APPDATA', 'LOCALAPPDATA', 'SYSTEMDRIVE', 'COMSPEC', 'PATHEXT',
+               'XDG_CONFIG_HOME', 'XDG_CACHE_HOME')
     return {key: os.environ[key] for key in allowed if key in os.environ}
 
 

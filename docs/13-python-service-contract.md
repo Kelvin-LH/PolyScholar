@@ -24,14 +24,25 @@
 
 文献字典字段：`id,title,authors,doi,year,tags,notes,sha256,filename,sizeBytes,createdAt`。作者使用分号分隔，`tags` 为字符串列表，时间为 UTC ISO8601。
 
-设置字段：`endpoint,model,engine,pythonPath,cachePath,sourceLanguage,targetLanguage,doiEnabled`。`pythonPath` 只用于兼容旧设置/运行状态，实际引擎路径受应用控制，无用户安装要求。模型名默认为空，通过服务查询或手动填写。拒绝设置中出现额外字段或 API 密钥；endpoint 拒绝凭据、query、fragment，要求 HTTPS 或本机环回 HTTP。
+设置字段：`endpoint,model,engine,pythonPath,cachePath,sourceLanguage,targetLanguage,doiEnabled,timeoutSeconds`。`pythonPath` 只用于兼容旧设置/运行状态，实际引擎路径受应用控制，无用户安装要求。模型名默认为空，通过服务查询或手动填写。拒绝设置中出现额外字段或 API 密钥；endpoint 拒绝凭据、query、fragment，要求 HTTPS 或本机环回 HTTP。
 
-任务字段：`id,documentId,engine,state,createdAt,error,artifacts,outputDir`；状态为 queued/running/completed/failed。输出目录固定存入任务记录，缓存变更只影响新任务；旧任务结果仍可读。缓存目录必须为本机绝对路径、可创建且可写，并且在源文献对象库之外。
+任务字段：`id,documentId,engine,state,createdAt,error,artifacts,outputDir,timeoutSeconds`；状态为 queued/running/completed/failed。输出目录固定存入任务记录，缓存变更只影响新任务；旧任务结果仍可读。缓存目录必须为本机绝对路径、可创建且可写，并且在源文献对象库之外。
 
 本地追踪仅记录事件类别、结果和时间；不回传、不包含论文正文或密钥。无关键词文献搜索、代写、科学真伪判断、多人 SaaS 或云同步。
 
 ## 集合与标签
 
-数据库 v2：`desktop_collections` 自引用父集合；`desktop_memberships` 为文献/集合多对多关系。v1 升级前使用 SQLite backup 保存 `library-before-v2.sqlite3`，原文对象不迁移。
+集合从数据库 v2 引入：`desktop_collections` 自引用父集合；`desktop_memberships` 为文献/集合多对多关系。v1 升级前使用 SQLite backup 保存 `library-before-v2.sqlite3`，原文对象不迁移。
 
 服务新增 `list_collections/create_collection/update_collection/delete_collection`、`document_collections/set_membership`、`list_tags/rename_tag` 与 `search_documents`。集合删除级联子集合和成员关系，文献/附件保留；成员移除只删除关系。树移动拒绝循环。搜索支持 text、collection_id、unfiled、tags（交集）、include_descendants。
+
+## 自查整改后的合同
+
+- 同一资料目录同时只允许一个 `LocalStore`，OS 锁先于迁移和恢复获取；调用者必须 `close()`，服务等待工作线程收尾后释放锁。锁文件可保留，是否有活跃 OS 锁才代表正在运行。
+- 缓存选择保留原路径，仅将应用拥有的 `jobs` 子目录设为 POSIX 0700；不修改用户共享父目录权限。Windows ACL 仍待验收。
+- `timeoutSeconds` 是 1–86400 的整数，默认为 600；每个任务保存提交时的值。超时会终止本地进程，远程请求仍可能计费。
+- `format_metadata(ids, format)` 供预览与导出共用；仅导出用户选中条目。
+- `subscribe_jobs(callback)` 返回取消订阅函数，通知在工作线程发出，原生 UI 通过 queued Qt 信号接收。仅接受实际提供的百分比和 token 用量；未知费用保持未知。
+- `diagnostic_report()` 只包含版本、平台、引擎/状态、允许的错误码与超时；不含路径、文献、密钥、端点或原始日志。用户预览后可 `export_diagnostics(path)` 保存本机，无自动上报。
+- 导出经临时文件和原子替换完成，保护原始导入文件、内部文献库/资源/译文及其硬链接；异常统一为本地可理解文案。
+- SQLite v3 升级前备份，审计新写入由枚举和触发器校验，保留旧历史。

@@ -1,3 +1,4 @@
+-- REFERENCE DESIGN ONLY: future DocumentIR/evidence schema, not desktop runtime migration.
 -- SPDX-License-Identifier: AGPL-3.0-only
 PRAGMA foreign_keys = ON;
 CREATE TABLE documents (

@@ -16,6 +16,7 @@ class StoreTests(unittest.TestCase):
         self.document = self.store.import_pdf(self.source)
 
     def tearDown(self):
+        self.store.close()
         self.temp.cleanup()
 
     def completed_job(self):
@@ -87,7 +88,9 @@ class StoreTests(unittest.TestCase):
             self.store.new_job(self.document['id'], 'pdfmathtranslate')
         with self.assertRaises(ValueError):
             self.store.delete_document(self.document['id'])
+        self.store.close()
         reopened = LocalStore(self.store.root)
+        self.addCleanup(reopened.close)
         self.assertEqual(reopened.list_jobs()[0]['state'], 'failed')
         reopened.delete_document(self.document['id'])
 

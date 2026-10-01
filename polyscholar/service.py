@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Python desktop application services. Direct calls, no local web service."""
 import json
+import math
+import platform
 import os
 from pathlib import Path
 import re
@@ -11,13 +13,13 @@ import threading
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from .store import LocalStore
+from integrations.engines import VERSIONS, limited_environment
 
-VERSIONS = {'babeldoc': ('babeldoc', '0.6.4'), 'pdfmathtranslate': ('pdf2zh', '1.9.11')}
 MAX_EVENT = 1024 * 1024
+ERROR_CODES = {'invalid_request','engine_unavailable','engine_failed','timeout','cancelled','source_changed','invalid_output','io_error','internal_error','protocol_error'}
 
 def environment():
-    return {k: os.environ[k] for k in ('PATH', 'HOME', 'USERPROFILE', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP',
-            'LANG', 'LC_ALL', 'SSL_CERT_FILE', 'SSL_CERT_DIR') if k in os.environ}
+    return limited_environment()
 
 def app_data_dir():
     if sys.platform == 'win32':
@@ -57,6 +59,53 @@ class LocalService:
         self._children = {}
         self._threads = {}
         self._closed = False
+        self._subscribers = []
+
+    def subscribe_jobs(self, callback):
+        with self._lock:
+            self._subscribers.append(callback)
+        def unsubscribe():
+            with self._lock:
+                if callback in self._subscribers:
+                    self._subscribers.remove(callback)
+        return unsubscribe
+
+    def _notify_job(self, job):
+        # Only allowlisted protocol fields cross the callback boundary.
+        event = {key: job[key] for key in ('id','state','progress','usage','cost','errorCode') if key in job}
+        with self._lock:
+            callbacks = list(self._subscribers)
+        for callback in callbacks:
+            try:
+                callback(event.copy())
+            except Exception:
+                pass  # A detached UI listener must not invalidate a persisted job.
+
+    @staticmethod
+    def _event_metrics(event):
+        result = {}
+        progress = event.get('progress')
+        if type(progress) in (int, float) and math.isfinite(progress) and 0 <= progress <= 100:
+            result['progress'] = progress
+        usage = event.get('usage')
+        if isinstance(usage, dict):
+            valid = {k: v for k, v in usage.items() if k in ('prompt_tokens','completion_tokens','total_tokens') and type(v) is int and 0 <= v <= 10**12}
+            if valid:
+                result['usage'] = valid
+        # Costs lack a currency/units contract, so retain no ambiguous amounts.
+        return result
+
+    def diagnostic_report(self):
+        # Explicit local export excludes titles, paths, endpoints, model names, IDs and raw errors.
+        return json.dumps({'schemaVersion': 1, 'python': platform.python_version(),
+            'platform': sys.platform, 'engines': {k:v[1] for k,v in VERSIONS.items()},
+            'jobs': [{'engine':j['engine'],'state':j['state'],
+                      'errorCode':j.get('errorCode') if j.get('errorCode') in ERROR_CODES else None,
+                      'timeoutSeconds':j.get('timeoutSeconds',600)} for j in self.store.list_jobs()]}, indent=2)
+
+    def export_diagnostics(self, path):
+        self.store.write_export(path, self.diagnostic_report().encode('utf-8'), extra_protected=[self.resources])
+        self.store.audit('diagnostics_exported')
 
     def list_documents(self):
         return self.store.list_documents()
@@ -201,7 +250,7 @@ class LocalService:
             payload = dict(protocol_version=1, job_id=job['id'], engine=settings['engine'], python=discovery['pythonPath'],
                 source=str(self.store.object_path(document)), output=job['outputDir'], endpoint=settings['endpoint'], model=settings['model'],
                 api_key=self._key, source_language=settings['sourceLanguage'], target_language=settings['targetLanguage'], pages=pages,
-                timeout=600, allow_document_upload=True, allow_asset_download=True)
+                timeout=job['timeoutSeconds'], allow_document_upload=True, allow_asset_download=True)
             thread = threading.Thread(target=self._run, args=(job.copy(), payload, worker), daemon=True, name='polyscholar-engine')
             self._threads[job['id']] = thread
             thread.start()
@@ -212,6 +261,7 @@ class LocalService:
         try:
             job['state'] = 'running'
             self.store.put_job(job)
+            self._notify_job(job)
             Path(job['outputDir']).parent.mkdir(parents=True, exist_ok=True)
             with self._lock:
                 if self._closed:
@@ -235,7 +285,16 @@ class LocalService:
                 event = json.loads(line)
                 if not isinstance(event, dict) or event.get('protocol_version') != 1 or event.get('job_id') != job['id']:
                     raise ValueError()
+                if event.get('event') not in ('started','progress','completed','failed'):
+                    raise ValueError()
+                metrics = self._event_metrics(event)
+                if metrics:
+                    job.update(metrics)
+                    self.store.put_job(job)
+                    self._notify_job(job)
                 if event.get('event') == 'failed':
+                    code = event.get('error_code')
+                    job['errorCode'] = code if code in ERROR_CODES else 'protocol_error'
                     raise ValueError()
                 if event.get('event') == 'completed':
                     completed = True
@@ -250,6 +309,7 @@ class LocalService:
             job.update(state='completed', artifacts=artifacts)
         except Exception:
             # Never retain raw exceptions, engine output, provider bodies, credentials or PDF text.
+            job.setdefault('errorCode', 'protocol_error')
             job.update(state='failed', error='翻译任务未完成。请检查内置引擎、模型设置与网络后重试；已发送的 API 请求可能计费。')
         finally:
             payload['api_key'] = ''
@@ -264,10 +324,13 @@ class LocalService:
             try:
                 self.store.put_job(job)
                 self.store.audit('translation_finished', 'succeeded' if job['state'] == 'completed' else 'failed')
+                self._notify_job(job)
             finally:
                 with self._lock:
                     self._children.pop(job['id'], None)
                     self._threads.pop(job['id'], None)
+                    if self._closed and not self._threads:
+                        self.store.close()
 
     @staticmethod
     def _stop(child):
@@ -287,22 +350,26 @@ class LocalService:
         return self.store.read_bounded_pdf(self.store.artifact_path(job_id, artifact_index))
 
     def export_translation(self, job_id, artifact_index, path):
-        return self.store.export_translation(job_id, artifact_index, path)
+        source=self.store.artifact_path(job_id,artifact_index)
+        self.store.write_export(path,self.store.read_bounded_pdf(source),extra_protected=[self.resources])
+        self.store.audit('artifact_exported')
 
     def export_metadata(self, document_ids, format, path):
+        body = self.format_metadata(document_ids, format)
+        self.store.write_export(path,body.encode('utf-8'),extra_protected=[self.resources])
+        self.store.audit('citation_exported')
+
+    def format_metadata(self, document_ids, format):
         identifiers = [document_ids] if isinstance(document_ids, str) else document_ids
         if not isinstance(identifiers, list) or any(not isinstance(value, str) for value in identifiers):
             raise ValueError('文献导出列表无效。')
         documents = [self.store.document(value) for value in dict.fromkeys(identifiers)]
         bodies = [self._metadata(document, format) for document in documents]
         if format == 'csl-json':
-            body = json.dumps([json.loads(value)[0] for value in bodies], ensure_ascii=False, indent=2)
-        elif format in ('bibtex', 'ris'):
-            body = ''.join(bodies)
-        else:
-            raise ValueError('不支持的元数据格式。')
-        Path(path).write_text(body, encoding='utf-8')
-        self.store.audit('citation_exported')
+            return json.dumps([json.loads(value)[0] for value in bodies], ensure_ascii=False, indent=2)
+        if format in ('bibtex', 'ris'):
+            return ''.join(bodies)
+        raise ValueError('不支持的元数据格式。')
 
     def _metadata(self, document, format):
         authors = [a.strip() for a in document['authors'].split(';') if a.strip()]
@@ -338,3 +405,5 @@ class LocalService:
             self._stop(child)
         for thread in threads:
             thread.join(timeout=6)
+        if not any(thread.is_alive() for thread in threads):
+            self.store.close()
