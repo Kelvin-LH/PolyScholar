@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/Python-Native%20Desktop-23614f.svg)](docs/03-architecture.md)
 [![Checks](https://github.com/Kelvin-LH/PolyScholar/actions/workflows/core.yml/badge.svg)](https://github.com/Kelvin-LH/PolyScholar/actions/workflows/core.yml)
 
-> **研发中，尚未发布安装包。** 最新技术路线统一为 **Python + PySide6 原生桌面 + SQLite**；正在迁移此前原型。下方为界面设计效果图，并非已验收的软件截图。完整论文翻译质量、真实模型 API 和 Windows/Linux 安装包尚未验证。
+> **研发中，尚未发布安装包。** 最新技术路线统一为 **Python + PySide6 原生桌面 + SQLite**；已完成基础原生界面和本地服务迁移。下方为界面设计效果图，并非已验收的软件截图。完整论文翻译质量、真实模型 API 和 Windows/Linux 安装包尚未验证。
 
 ## 界面效果图
 
@@ -47,11 +47,19 @@
 
 </details>
 
+## 原生界面当前截图
+
+以下是 Python / PySide6 原型实际渲染截图（macOS 离屏运行，示例条目为合成测试 PDF），不代表完整功能验收。
+
+![Python 原生文献库截图](design/screenshots/library-python.png)
+
+![Python 原生设置截图：获取可用模型、缓存目录与自带运行环境](design/screenshots/settings-python.png)
+
 ## 使用方式与数据边界
 
 - **个人原生桌面应用**，目标支持 Windows、macOS、Linux；无需部署服务器或创建账户。
 - 应用代码统一使用 Python，界面采用 PySide6，数据库使用 SQLite。翻译引擎在独立进程与独立依赖环境中运行。
-- 发行包将内置 Python 与引擎运行环境；已有 macOS arm64 两引擎独立运行环境的版本与迁移检查，完整安装包仍在制作。
+- 发行包将内置 Python 与引擎运行环境；已有 macOS arm64 两引擎独立运行环境的版本与迁移检查，本地 macOS arm64 开发包已生成并通过启动检查，尚未发布下载。
 - 文献、笔记、数据库、缓存和译文保存在本机；缓存目录可调整，原始文献与译文分开保存。
 - 允许联网的业务仅包括：配置的模型 API（如 DeepSeek 或兼容接口）、DOI 在线元数据查询、上游模型和字体下载。API 服务会接收所选翻译内容，可能产生费用。
 
@@ -61,13 +69,23 @@
 
 | 模块 | 状态 |
 |---|---|
-| 六个核心界面 | 已完成设计效果图，原生 Python 界面开发中 |
+| 六个核心界面 | 设计效果图与基础原生 Python 界面已完成 |
 | BabelDOC / PDFMathTranslate | 已有真实 CLI 适配、独立环境、失败与取消处理；未验收真实论文翻译 |
-| 自带 Python | macOS arm64 独立运行环境已检查；桌面安装包集成中 |
-| 本地文献管理 | SQLite / PDF 导入去重 / 元数据与笔记功能迁移到 Python 中 |
-| 译文导出与缓存目录 | 已明确交互与安全边界，Python 迁移中 |
+| 自带 Python | macOS arm64 本地开发包已包含运行环境并通过启动检查；尚未签名、公证或发布 |
+| 本地文献管理 | Python 本地服务已实现导入去重、元数据与笔记；合成 PDF 阅读检查通过 |
+| 译文导出与缓存目录 | Python 服务已实现导出与缓存切换，边界测试通过 |
+| 模型名称 | 通过兼容接口获取、选择或手动输入；协议测试通过，真实服务待验收 |
 | Zotero 对标 | 分阶段实现，尚未达到完整功能对齐 |
 | 证据摘要 / 图文注释 / CSL 样式 | 规划中，不提供伪造结果 |
+
+开发者可运行原生界面：
+
+```sh
+python3 -m pip install -e .
+python3 -m polyscholar
+```
+
+译文引擎的独立运行环境准备与发行构建见 [嵌入 Python](integrations/EMBEDDED_RUNTIME.md)。
 
 ## 开源许可与来源追踪
 

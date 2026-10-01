@@ -8,12 +8,29 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 VERSIONS = {'babeldoc': ('babeldoc', '0.6.4'), 'pdfmathtranslate': ('pdf2zh', '1.9.11')}
+
+class EngineError(RuntimeError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+def file_hash(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+def pdf_header(path):
+    with path.open('rb') as stream:
+        return stream.read(5) == b'%PDF-'
 
 @dataclass(frozen=True)
 class Request:
@@ -36,9 +53,9 @@ def validate(req):
         raise ValueError('Unsupported engine')
     if not req.python.is_file() or not req.source.is_file():
         raise ValueError('Python executable and source PDF must exist')
-    if req.source.suffix.lower() != '.pdf' or req.source.read_bytes()[:5] != b'%PDF-':
+    if req.source.suffix.lower() != '.pdf' or not pdf_header(req.source):
         raise ValueError('Input must be a PDF')
-    if req.output.exists():
+    if req.output.exists() or req.output.is_symlink():
         raise ValueError('Use a new output directory to prevent overwriting')
     parsed = urlsplit(req.endpoint)
     local = parsed.hostname in {'localhost', '127.0.0.1', '::1'}
@@ -66,7 +83,7 @@ def validate(req):
 
 def command(req, config):
     # Absolute paths and argv lists avoid shell evaluation and option injection.
-    args = [str(req.python.absolute())]
+    args = [str(req.python.absolute()), '-I']
     source, output = str(req.source.resolve()), str(req.output.resolve())
     if req.engine == 'babeldoc':
         args += ['-m', 'babeldoc.main', '--files', source, '--config', str(config),
@@ -113,11 +130,11 @@ def check_version(req, env):
     package, expected = VERSIONS[req.engine]
     # Package strings are fixed internal constants, not user code.
     code = 'import importlib.metadata; print(importlib.metadata.version(' + repr(package) + '))'
-    result = subprocess.run([str(req.python.absolute()), '-c', code], env=env,
+    result = subprocess.run([str(req.python.absolute()), '-I', '-c', code], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             text=True, timeout=30)
     if result.returncode != 0 or result.stdout.strip() != expected:
-        raise RuntimeError('Pinned engine version missing or mismatched')
+        raise EngineError('engine_unavailable', 'Pinned engine version missing or mismatched')
 
 
 def stop_process(proc):
@@ -138,40 +155,52 @@ def run(req, api_key):
     validate(req)
     env = limited_environment()
     check_version(req, env)
-    source_hash = hashlib.sha256(req.source.read_bytes()).hexdigest()
-    req.output.mkdir(parents=True, exist_ok=False)
+    source_hash = file_hash(req.source)
     # POSIX modes restrict ordinary same-host users; Windows requires ACL review.
     with tempfile.TemporaryDirectory(prefix='polyscholar-job-') as temporary:
         temp = Path(temporary)
         config = private_config(req, temp, api_key)
+        req.output.mkdir(parents=True, exist_ok=False, mode=0o700)
+        succeeded = False
         try:
             proc = subprocess.Popen(command(req, config), cwd=temp, env=env,
                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL,
                                     start_new_session=(os.name == 'posix'))
-        except OSError:
-            raise RuntimeError('Engine could not start') from None
-        try:
-            result = proc.wait(timeout=req.timeout)
-        except (subprocess.TimeoutExpired, KeyboardInterrupt):
-            stop_process(proc)
-            raise RuntimeError('Engine timed out or was interrupted; remote requests may still be billed') from None
-        if result:
-            raise RuntimeError('Engine failed; raw engine logs are suppressed to avoid exposing private data')
-        if hashlib.sha256(req.source.read_bytes()).hexdigest() != source_hash:
-            raise RuntimeError('Source PDF changed during execution')
-        outputs = sorted(req.output.glob('*.pdf'))
-        if not outputs or any(p.is_symlink() or p.read_bytes()[:5] != b'%PDF-' for p in outputs):
-            raise RuntimeError('Engine did not produce valid PDF output headers')
-        manifest = {'project': 'PolyScholar', 'engine': req.engine,
+            try:
+                result = proc.wait(timeout=req.timeout)
+            except subprocess.TimeoutExpired:
+                stop_process(proc)
+                raise EngineError('timeout', 'Engine timed out; remote requests may still be billed') from None
+            except KeyboardInterrupt:
+                stop_process(proc)
+                raise EngineError('cancelled', 'Engine interrupted; remote requests may still be billed') from None
+            if result:
+                raise EngineError('engine_failed', 'Engine failed; raw engine logs are suppressed to avoid exposing private data')
+            if file_hash(req.source) != source_hash:
+                raise EngineError('source_changed', 'Source PDF changed during execution')
+            outputs = sorted(req.output.glob('*.pdf'))
+            if not outputs or any(p.is_symlink() or not pdf_header(p) for p in outputs):
+                raise EngineError('invalid_output', 'Engine did not produce valid PDF output headers')
+            manifest = {'project': 'PolyScholar', 'engine': req.engine,
                     'engine_version': VERSIONS[req.engine][1], 'model': req.model,
                     'source_sha256': source_hash, 'source_language': req.source_language,
                     'target_language': req.target_language, 'pages': req.pages or 'all',
                     'license': 'AGPL-3.0-only', 'signed': False,
-                    'outputs': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in outputs}}
-        (req.output / 'polyscholar-export.json').write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-        return manifest
+                    'outputs': {p.name: file_hash(p) for p in outputs},
+                    'cost': None, 'usage': None, 'quality_verified': False}
+            (req.output / 'polyscholar-export.json').write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+            succeeded = True
+            return manifest
+        except OSError:
+            raise EngineError('io_error', 'Local engine or file operation failed') from None
+        finally:
+            if not succeeded:
+                if req.output.is_symlink():
+                    req.output.unlink(missing_ok=True)
+                elif req.output.is_dir():
+                    shutil.rmtree(req.output)
 
 
 def main():

@@ -1,8 +1,0 @@
-[package]
-name = "polyscholar-core"
-version = "0.1.0"
-edition = "2021"
-license = "AGPL-3.0-only"
-description = "Domain validation reference for PolyScholar; not a PDF or LLM engine"
-
-[dependencies]

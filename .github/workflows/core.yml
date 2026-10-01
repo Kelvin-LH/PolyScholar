@@ -1,4 +1,4 @@
-name: Core baseline
+name: Python baseline
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
@@ -15,4 +15,4 @@ jobs:
           python-version: '3.12'
       - run: python scripts/check_baseline.py
       - run: python -m unittest discover -s tests -v
-      - run: cargo test --workspace
+      - run: python -m compileall -q polyscholar integrations

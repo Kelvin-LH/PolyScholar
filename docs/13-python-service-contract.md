@@ -1,0 +1,31 @@
+# Python 原生桌面服务合同
+
+用户选择全 Python 实现后，本合同替代旧 Rust/Tauri IPC 合同。PySide6 直接调用 `polyscholar.service.LocalService`，没有浏览器、WebView、HTTP 服务或团队账户。数据与结果保存本机。引擎运行时使用随应用提供的两份独立 CPython，用户无需安装或配置 Python。
+
+## 调用接口
+
+`LocalService(data_dir=None, resources_dir=None)`。默认资料目录采用各平台标准应用数据目录；打包资源位于 macOS `Contents/Resources/resources`，Windows/Linux `_MEIPASS/resources`。开发时使用工程资源根目录。
+
+- `list_documents() -> list[dict]`
+- `import_pdf(path) -> dict`：100 MiB 限制、PDF 文件头验证、SHA-256 去重、只读本地对象副本。
+- `update_document(document_id, patch) -> dict`：标题、作者、DOI、年份、标签和本地笔记。
+- `delete_document(document_id)`：保护正在执行的任务；删除库中副本与该文献任务产物，保留外部原文件。
+- `read_pdf(document_id) -> bytes`：供 QtPdf 的 QBuffer 使用。
+- `get_settings() -> dict`；`save_settings(settings) -> dict`。
+- `set_session_key(key)`：密钥仅存进程内存，传空文本清除，关闭应用清除；不写 JSON、SQLite、日志。
+- `discover_engine(engine) -> {pythonPath, available, message}`：只查应用 `runtime/<engine>/bin/python3` 或开发 `.runtime/<engine>`，Windows 查 `python.exe`/`Scripts/python.exe`；独立验证 BabelDOC 0.6.4、PDFMathTranslate 1.9.11。不存在时明确报告，不回退到系统 Python。
+- `list_models(endpoint=None, key=None) -> list[str]`：使用会话密钥 GET OpenAI 兼容 `<base>/models`，超时 15 秒、响应最多 1 MiB、禁止重定向凭据；去重排序，失败只显示脱敏提示，允许手动填写模型名。GUI 应在 QThread 调用。
+- `list_jobs() -> list[dict]`
+- `start_translation(document_id, pages='') -> dict`：自动选择所属引擎内置解释器，后台线程执行 `python -I integrations/job_worker.py`，密钥经 stdin 传入；默认已授权 API 与模型/字体下载，无额外勾选。首版全局一个活动任务。
+- `read_artifact_pdf(job_id, artifact_index=0) -> bytes`
+- `export_translation(job_id, artifact_index, path)`：仅可复制已完成任务的真实 PDF；拒绝产物路径穿越、内部译文覆写、源文献对象库覆写及硬链接别名；目标由原生保存对话框选择。
+- `export_metadata(document_ids, format, path)`：`document_ids` 可为单个 ID 或 ID 列表；格式为 `csl-json`、`bibtex`、`ris`。属于元数据交换，不承诺 GB/APA 等最终排版。
+- `close()`：清除密钥、终止活动 worker 并等待回收；远程已发送请求可能计费。GUI 退出时调用。
+
+文献字典字段：`id,title,authors,doi,year,tags,notes,sha256,filename,sizeBytes,createdAt`。作者使用分号分隔，`tags` 为字符串列表，时间为 UTC ISO8601。
+
+设置字段：`endpoint,model,engine,pythonPath,cachePath,sourceLanguage,targetLanguage,doiEnabled`。`pythonPath` 只用于兼容旧设置/运行状态，实际引擎路径受应用控制，无用户安装要求。模型名默认为空，通过服务查询或手动填写。拒绝设置中出现额外字段或 API 密钥；endpoint 拒绝凭据、query、fragment，要求 HTTPS 或本机环回 HTTP。
+
+任务字段：`id,documentId,engine,state,createdAt,error,artifacts,outputDir`；状态为 queued/running/completed/failed。输出目录固定存入任务记录，缓存变更只影响新任务；旧任务结果仍可读。缓存目录必须为本机绝对路径、可创建且可写，并且在源文献对象库之外。
+
+本地追踪仅记录事件类别、结果和时间；不回传、不包含论文正文或密钥。无关键词文献搜索、代写、科学真伪判断、多人 SaaS 或云同步。

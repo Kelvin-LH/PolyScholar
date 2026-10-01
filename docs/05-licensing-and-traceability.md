@@ -31,12 +31,12 @@ AGPL 允许商业使用。防止代码被用于封闭修改版时，应依赖适
 |---|---|---|
 | 源码 | AGPL 文件头、版权、commit、文件哈希清单 | 已实现 |
 | 引擎任务 | 引擎名、固定版本、输入哈希、语言与页范围 | CLI 成功后输出本地 manifest |
-| 模型边界 | provider/model、授权范围、usage、预算决策 | Rust 定义 ModelRequested；严格网关待实现 |
-| 文档与摘要 | 解析修订、block ID、页码、证据摘录 | Rust 校验参考；真实解析/总结待实现 |
+| 模型边界 | provider/model、授权范围、usage、预算决策 | Python 领域模型迁移目标；严格网关待实现 |
+| 文档与摘要 | 解析修订、block ID、页码、证据摘录 | Python 校验迁移目标；真实解析/总结待实现 |
 | 引用/产物导出 | 应用版本、样式哈希、输出哈希 | 引擎输出哈希已实现；引用服务待实现 |
 | 官方发行 | 签名清单、SBOM、相应源码包与桌面来源说明 | 计划，当前清单未签名 |
 
-五类领域追踪点：DocumentParsed、ModelRequested、SummaryCreated、CitationExported、ArtifactExported。Rust 本地审计类型无正文、密钥、身份和设备字段。引擎输出 manifest 只留本地，但含模型、源文件哈希和输出文件名，仍可能关联文献，不宜自动公开；问题报告由用户预览并脱敏。
+五类领域追踪点：DocumentParsed、ModelRequested、SummaryCreated、CitationExported、ArtifactExported。Python 本地审计模型保持无正文、密钥、身份和设备字段；旧实现不是迁移验证。引擎输出 manifest 只留本地，但含模型、源文件哈希和输出文件名，仍可能关联文献，不宜自动公开；问题报告由用户预览并脱敏。
 
 来源标记不属于商用锁，不检测用户真实商业目的。公开源码可以被修改和移除标记；AGPL 义务是否违反需要核查实际行为和证据，不能仅按标记缺失下结论。不得远程停用、删除私人文献或秘密上传遥测。
 

@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     for required in ['LICENSE', 'NOTICE', 'README.md', 'schemas/001_initial.sql',
-                     'crates/polyscholar-core/src/lib.rs', 'integrations/engines.py']:
+                     'polyscholar/app.py', 'integrations/engines.py']:
         assert (ROOT / required).is_file(), required
     for path in [ROOT / 'README.md', ROOT / 'CONTRIBUTING.md', ROOT / 'SECURITY.md', ROOT / 'THIRD_PARTY_NOTICES.md', *sorted((ROOT / 'docs').glob('*.md'))]:
         if '.git' in path.parts or 'licenses' in path.parts:

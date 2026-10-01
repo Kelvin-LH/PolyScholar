@@ -28,7 +28,8 @@ def main():
             else:
                 code += 'assert a.service=="openai"; '
             code += 'print("Pinned upstream parser passed")'
-            subprocess.run([str(binary), '-c', code, *command(req, config)[3:]],
+            args = command(req, config)
+            subprocess.run([str(binary), '-I', '-c', code, *args[args.index(module)+1:]],
                            env=env, cwd=base, check=True, timeout=60)
             print(name, 'version and real argument parser passed; no translation executed')
 

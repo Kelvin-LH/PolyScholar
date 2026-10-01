@@ -1,85 +1,76 @@
 # 架构与编程语言设计
 
+决策更新：2026-10-02。用户明确要求应用全部使用 Python，不使用 Rust 或 Go；此决策替代旧版 Rust/Tauri/TypeScript 方案。应用自有界面、领域服务、数据与任务代码统一为 Python，采用 PySide6 原生桌面控件。第三方 Qt、PDF/模型库可能包含其自身的原生实现，不要求重写这些依赖。
+
 ## 架构约束
 
-个人桌面应用，明确不采用 B/S。没有 Axum 服务、PostgreSQL、浏览器客户端、PWA、团队账户或 SaaS。Tauri 使用打包的本机界面及 IPC；不启动本地 HTTP 应用服务器。外部 LLM API 属于用户选择的服务调用，不是本产品 B/S 部署。文献和数据库都在本地，不提供云同步。
+面向个人 Windows、macOS、Linux 桌面；不采用 B/S，没有 WebView、React、浏览器产品、本地 HTTP 应用服务器、团队账户或 SaaS。PySide6 Widgets 直接调用本机 Python 用例服务，长任务由 Python 工作进程执行；界面线程只负责交互和呈现。文献与 SQLite 数据库留在本地，无云同步。
 
-联网白名单业务为模型 API、DOI 元数据查询及模型/字体下载；其他业务处理本地完成。DOI 查询不上传 PDF，资源下载不上传文献。禁止云端 OCR、云文献库、遥测与诊断上传服务。“模型网关”指本机 Rust 调度模块，不是自建云服务。详细边界与尚待验证的引擎行为见 [个人使用与联网范围](09-local-and-network-scope.md)。
+允许联网业务仅为用户配置的模型 API、DOI 元数据查询、模型/字体下载。文本 API 与模型/字体下载沿用用户明确授权，任务默认允许并携带授权字段，不要求手动双勾选；实际目的地与输入范围仍展示，图片外发等新增范围另行确认。DOI 仅发送标识，资源下载不上传文献。禁止云 OCR、遥测、云文献库与自动公开。详见 [联网范围](09-local-and-network-scope.md)。
 
-## 技术选择
+## Python 技术选择
 
-| 层 | 选择 | 理由 / 代价 |
+| 层 | 选择 | 设计说明 |
 |---|---|---|
-| 核心 | Rust，Tokio（未来异步）、Serde、SQLite | 高效内存与并发、领域模型可复用；开发和跨平台依赖打包成本较高 |
-| 桌面壳 | Tauri 2 | Rust 后端 + 系统 WebView；需处理不同平台 WebView/权限/安装依赖 |
-| 界面 | TypeScript + React + PDF.js | 文献阅读和界面生态成熟；不承担密钥或许可校验；当前未初始化前端 |
-| PDF/OCR 工作进程 | BabelDOC/PDFMathTranslate 双引擎；Docling/Tesseract 候选 | 避免重造 OCR；Python 仅作为可替换模型 sidecar，版本、模型和包体单独固定 |
-| 元数据与引用 | CSL-JSON + 成熟 CSL 处理器候选 | 可追溯样式和本地生成；处理器与样式各有许可，选型后再锁版本 |
+| 界面 | PySide6 Qt Widgets | 主窗口、集合树、文献表格、详情栏、原生文件对话框；Python 信号/槽绑定，避免另一个前端语言 |
+| 用例/领域 | Python 类型标注、dataclass/显式校验 | 元数据、坐标、证据、任务状态、外发范围、来源追踪统一实现，不再维护 Rust 核心 |
+| 数据 | Python sqlite3 + 本地受管文件库 | 外键、事务、迁移备份与 WAL；连接归所属线程，长任务不跨线程共享连接 |
+| PDF 阅读 | PySide6 QtPdf/QtPdfWidgets | 真实本地页面渲染、缩放与页码；块级定位仍需解析结果映射，不能由页面渲染推导已完成 |
+| PDF/OCR 翻译 | BabelDOC/PDFMathTranslate 独立 Python 工作进程 | 官方 CLI 边界、分别锁定依赖，不能把两个冲突环境合并；已有协议适配保留 |
+| 模型与元数据 | 本机 Python 服务调用已允许的外部 API | 请求校验、目的地说明、费用未知状态；严格预算与上游载荷隔离仍待实现和验证 |
+| 引用 | 本地 Python 可调用的成熟 CSL 处理器候选 | 样式与处理器独立许可审查、金标测试，未接入前禁用格式化引用 |
+| 发行 | PyInstaller 优先验证，pyside6-deploy 候选 | 发行自带 Python 与 Qt 运行组件，不要求个人用户先装 Python；分别构建和测试各目标平台 |
 
-不以“所有代码均用高效语言”为目标。Rust 处理调度、数据与策略，模型计算依赖本地原生库；TypeScript 处理交互，Python sidecar 处理必要的成熟模型生态。效能优先通过缓存、增量处理、页面懒加载和有界并发实现，而不是仅凭语言名称。
+性能通过文件流式哈希、SQLite 索引、页面懒加载、缓存、增量任务和有界工作进程实现。CPU 密集解析不占用 GUI 线程；模型运算可使用第三方原生库。语言统一不代表全部 PDF 可以无损翻译，需实测。
 
-Electron 开发生态成熟但运行时通常较重；Flutter 可一体化 UI，但 PDF 阅读、引用生态需更多桥接；全 Rust UI 现阶段提高文本排版和无障碍成本。因此首版采用 Rust/Tauri/TypeScript。
+Qt 官方提供 [QPdfView](https://doc.qt.io/qtforpython-6/PySide6/QtPdfWidgets/QPdfView.html) 的 Python 页面视图接口；能力接入与块级解析是不同交付。应用代码不编写 C++/Rust/Go。pyside6-deploy 是封装 Nuitka 的部署工具，工具内部可将 Python 编译并链接 libpython；这是发行实现，不增加应用开发语言。[官方部署说明](https://doc.qt.io/qtforpython-6/deployment/deployment-pyside6-deploy.html)
 
 ## 逻辑组件
 
 ```mermaid
 flowchart TD
-  UI[个人桌面 Tauri] --> APP[Rust 用例层]
-  APP --> LIB[文献与引用服务]
+  UI[PySide6 个人原生桌面] --> APP[Python 用例层]
+  APP --> LIB[本地文献与引用]
   APP --> JOB[持久化任务调度]
-  APP --> POL[隐私预算与授权策略]
-  JOB --> DOC[文档解析适配器]
-  DOC --> WORKER[受限 PDF OCR 工作进程]
-  JOB --> LLM[LLM 网关与能力协商]
-  LLM --> REMOTE[用户授权的外部 API]
-  LLM --> LOCAL[用户选择的本地模型]
-  APP --> DB[(SQLite + 对象文件库)]
-  APP --> AUD[本地操作追踪与来源记录]
-  APP --> EXP[双语视图 / 译文 / 引用导出]
+  APP --> POL[范围与预算策略]
+  JOB --> WORKER[独立 Python PDF OCR 工作进程]
+  WORKER --> LLM[已允许的模型 API]
+  APP --> DB[(SQLite 与受管文件)]
+  APP --> AUD[本地追踪]
+  APP --> EXP[阅读与本地导出]
 ```
 
-## 领域边界
+## 领域与数据
 
-- `library`：文献 UUID、附件哈希、作者/DOI/原始元数据、标签与人工修改。
-- `document`：DocumentIR、页坐标、阅读顺序、段落与图文 OCR 框、不可翻译对象。
-- `translation`：翻译版本、术语版本、来源、译文、状态和受保护 token 检查。
-- `summary`：结构化结论、证据锚点、人工确认与不足证据状态。
-- `citation`：样式版本与哈希、标准元数据及交换格式损失说明。
-- `provider`：模型能力、适配器、预算、限流与外发许可；正文是数据，不可成为系统指令。
-- `provenance`：构建来源、导出来源和本地事件，不负责判断真实法律商用性质。
-- `compliance`（后续）：桌面“关于”页的 AGPL/上游许可、版本、仓库及源码获取说明；无需授权服务器。
+library 负责集合/子集合、多集合成员、类型化条目/作者、标签、附件、笔记、检索和恢复；逐步对标 [Zotero 矩阵](12-zotero-parity.md)。基础 PDF 列表不是完整文献管理。
 
-新增 `integrations/engines.py` 调用两个独立版本环境的官方 CLI；不依赖不稳定的 BabelDOC 内部 Python API。当前 `crates/polyscholar-core` 仅实现坐标、证据引用、保护 token 和追踪点的领域校验，既不调用模型，也不声称覆盖以上服务。
+document 负责 DocumentIR、阅读顺序、段落/图文 OCR 框和不可翻译对象；translation 保存译文版本、术语、模型与保护 token 校验；summary 保存结论与证据；citation 保存标准元数据、样式版本/哈希与交换格式损失；provider 负责请求范围/授权字段和错误；provenance 保存最小本地事件；compliance 提供关于/许可证/源码入口，不建立授权服务器。
 
-## 核心数据
+文献 UUID 与文件 SHA-256 分离，同 DOI 的预印本和正式版不自动合并。坐标使用已应用 CropBox/旋转的可见页、左上原点与归一化 [0,1]，保留仿射变换；重新解析建立 block 映射，不重用旧 ID。缓存键包含文件/原文哈希、解析修订、模型、语言、提示词和术语版本。
 
-`documents`→`files` / `pages`→`blocks`→`translations`；`claims`→`claim_evidence`→`blocks`；`jobs` / `job_chunks` 支持续传；`audit_events` 存最小化事件；`citation_styles` 保留样式哈希。
+集合是组织关系而不是文件目录；事务保证多集合不复制附件，集合移除不等于删除条目。原始元数据与人工修订分别保留，LLM 不猜 DOI/作者/年份补全。数据库迁移必须版本检测与备份；共享附件按引用计数处理，缓存清理不删除原件。
 
-- 文献 UUID 与文件 SHA-256 分离：相同论文可有预印本/正式版，不能按 DOI 自动合并所有文件。
-- 坐标统一为“已应用 CropBox 和页面旋转后的可见页，左上原点，归一化 [0,1]”；保存到 PDF 原始坐标的仿射变换。
-- block ID 在某个提取修订内稳定；重新解析建立映射，不重用旧 ID 造成错误摘要定位。
-- 缓存键包括文献文件哈希、block 原文哈希、解析修订、源/目标语言、模型标识、提示词哈希、术语版本与输出格式。
-- 保存 original metadata 与人工修订；不让 LLM 猜 DOI、作者或年份补全来源。
-- 数据库迁移需备份与版本检测；删除文件先检查共享附件引用，删除缓存不删除原件。
+已有 integrations/engines.py 与 integrations/job_worker.py 是 Python 引擎边界，可迁移复用；自有领域和桌面服务改为 Python 后以实际测试重新验收。旧架构验证不等于新原生桌面已完成。
 
-可执行的初始模式见 `schemas/001_initial.sql`；完整服务的事务与迁移仍待实现。
+## 执行与隐私边界
 
-## 执行流程与边界
+状态 queued → running → completed/failed/cancelled，paused 与恢复只在真实支持后启用。费用/百分比不可观测时为未知；成功必须进程退出且产物有效，不以 UI 点击成功判断。已完成块续传与严格预算属于目标能力，不能伪称现有。
 
-任务状态：queued → running → completed / failed / cancelled；暂停为 paused。分块保存 completed/failed 状态；重启时 running 块转可恢复状态，按成功记录跳过。每次远程请求先取得外发授权并预留预算；重试和切换模型都计预算，同一块用幂等键记录，远端未支持幂等时不能保证零重复费用。
+桌面服务与工作进程通过版本化 JSON/NDJSON 和 stdin/stdout 通信，不使用 shell；密钥只随任务 stdin 传递，不放 argv/环境/数据库/日志。工作进程验证字段与固定版本，限制输入/时间/并发、任务专属输出目录，失败清理临时凭据与部分产物；取消终止进程树并说明远端请求可能仍计费。进程隔离不等于沙箱，上游联网载荷仍需逐平台检查。
 
-解析工作进程通过版本化 JSON-RPC/NDJSON 与 Rust 通信，使用任务专属目录和允许列表操作；限制页数、文件体积、内存、并发及运行时间。默认无网络，模型下载为独立用户操作。不执行 PDF JavaScript、嵌入附件或论文链接。进程隔离本身不等于沙箱，各平台需额外权限/容器边界验证。
+密钥优先 OS 凭据库；尚未接入时只支持本次会话内存，不降级明文保存。Python UI 输入清空后服务不回传密钥，普通设置只保存非秘密配置。endpoint 保存前拒绝凭据、query、fragment 和非 HTTPS（明确本机 loopback HTTP 除外）。
 
-Tauri 最小 capability；CSP 禁止任意脚本/远程代码；动态 URL 经过域名和 HTTPS 校验。密钥保存于 OS 凭据库；Linux 缺 secret service 时明确要求用户选择安全替代，不悄悄降级为明文。API 密钥只传 Rust 后端；禁止在请求 URL、日志、数据库或 GitHub 中出现。
+不执行 PDF JavaScript、嵌入附件或正文中的操作指令；模型没有工具/文件权限。输出文本按原生纯文本显示，外部链接限制 URI scheme；导出后端复核实际路径和哈希。正文、日志、缓存与 SQLite 都不推送 GitHub。
 
-PDF/摘要/图注均是不可信输入；LLM 没有工具执行权限、文件系统权限或授权修改能力。导出 HTML 转义，URI scheme 限制；外部模型端点改动需重新确认数据发送目的地。个人客户端不设计账户、租户、团队服务或 Web 应用入口。
+缓存目录可选且验证可写，解释器自动发现/固定版本探测、自定义只在高级设置；译文 PDF 原生保存导出拒绝覆盖原件。发行内置两个锁定引擎运行组件的具体组织须验证依赖冲突、包体与更新，不能拿 GUI 冻结成功证明引擎已随包可用。
 
-## 跨平台交付策略
+## 跨平台发行与验证
 
-- M0：Rust 核心 CI 覆盖 Ubuntu/Windows/macOS；这不是应用验证。
-- M1/M2：桌面包目标 Windows 10/11 x64、macOS 13+ arm64/x64、Ubuntu 22.04/24.04 x64，实际最低版本在 PDF/OCR 包和 Tauri 前置依赖确认后冻结。
-- 发行矩阵每项实际编译、安装与端到端测试，校验字体、图文对齐、密钥库与工作进程权限；仅发布已验证平台。
-- 发布必须生成依赖/模型/字体 SBOM、SHA-256 清单、许可证清单与签名构建来源；签名密钥只在受控发行环境。
-- 首版及当前路线只涵盖个人 Windows/macOS/Linux 桌面。移动原生客户端若未来需要，另行提出需求，不在本轮承诺。
+- 基线采用 Python 单元/集成与 PySide6 本机 GUI 检查；核心测试通过不表示安装包可运行。
+- PyInstaller 可收集 Python 解释器及依赖；官方说明不支持由一个操作系统交叉生成所有平台包，须按平台构建。[PyInstaller 运行原理](https://pyinstaller.org/en/stable/operating-mode.html)
+- pyside6-deploy 官方描述 Windows exe、Linux bin 和 macOS app 产物；实际签名、安装、Qt PDF 插件、引擎环境及运行路径仍分别验证，工具支持不等于项目已通过。
+- 最低 Windows/macOS/Linux 版本由选定 PySide6/Python/模型依赖冻结后确定；原来的目标只是规划，不承诺全部已支持。
+- 发行自带运行时，在未安装 Python 的干净机器检验首次启动、资源准备、导入、阅读、翻译任务、导出和安全删除；Linux 凭据服务、Windows ACL/macOS 签名另测。
+- 仅发布实际验收的平台，生成 SBOM、依赖/字体/模型许可、哈希清单、相应源码包与构建说明；无完整签名/打包结果时如实记为未验证。
 
-参考：[Tauri 架构](https://v2.tauri.app/concept/architecture/)、[PDF.js](https://github.com/mozilla/pdf.js)、[Docling](https://github.com/docling-project/docling)。具体第三方选型未集成，见 THIRD_PARTY_NOTICES.md。
+原有六屏 UI、AGPL 许可、默认允许两类任务联网、个人本地范围与 Zotero 对标目标继续有效。Qt/PySide6 及打包依赖按实际使用模块审查许可，不因改为 Python 自动解决全部第三方合规。

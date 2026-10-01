@@ -14,3 +14,16 @@ node_modules/
 
 .venvs/
 .runtime/
+
+.tools/
+desktop/src-tauri/target/
+desktop/dist/
+
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+/build/
+/dist/
+*.spec
+*.egg-info/
