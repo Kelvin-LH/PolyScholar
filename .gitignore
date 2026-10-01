@@ -1,0 +1,16 @@
+/target/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+node_modules/
+.DS_Store
+*.db
+*.db-wal
+*.db-shm
+/private-data/
+/provenance.json
+
+.venvs/
+.runtime/

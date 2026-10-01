@@ -1,0 +1,10 @@
+PolyScholar · 研译
+Copyright (c) 2026 Kelvin-LH and respective contributors.
+SPDX-License-Identifier: AGPL-3.0-only
+Repository: https://github.com/Kelvin-LH/PolyScholar
+Commercial use is permitted under the AGPL; applicable source obligations remain.
+Official project identity must not be misrepresented by modified distributions.
+BabelDOC and PDFMathTranslate are independently maintained upstream projects.
+Their names identify integration targets and imply no endorsement.
+Upstream license copies are in licenses/upstream/.
+This project does not implement automatic telemetry.
