@@ -22,11 +22,15 @@
 
 ## 最新阶段收尾：六项 CI 成功与回调归属修复
 
+2026-10-03 本机发行准备补证：从 `142cd77` 重新构建 macOS arm64 冻结开发包，非复用旧 `.app`。最终包前缀内 BabelDOC 0.6.4、pdf2zh 1.9.11 与两套 CPython 3.12.14 的版本及 pip check 实际通过；整个 `.app` 移到含空格的新目录后，使用仅 `/usr/bin:/bin` 的 PATH、空白临时工作目录和临时文献库运行实际冻结可执行文件 `--smoke-test`，退出码0并输出原生 GUI 成功。迁移后的两套嵌入运行时再次版本/pip check 成功，证明本次检查无需 PATH 上的外部 Python。
+
+此包验证限于当前开发机的离屏 Qt 启动、临时库关闭和嵌入引擎版本/依赖；未证明冻结包内引文/PDF spawn、完整迁移交互、真实翻译、下载载荷或干净系统安装。没有 Developer ID 签名/公证，没有发布下载。构建包与合成检查记录保留于 Git 忽略的 `.tools/validation-142cd77/`，没有私人文献或密钥。Windows/Linux 冻结包、三平台安装及其他发行门槛仍开放。
+
 源码 `ad43909` 的 [CI 37015097200](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37015097200) 已核对终态及各 job conclusion：Windows/macOS/Linux 的 core 与 native-gui 六项全部成功，Windows 迁移预览及选中导入步骤成功。本次成功未证明此前偶发超时的原因，也不是安装包或真实引擎/API验收。
 
 独立复核另复现共享 IO 对话框的完成回调未绑定任务：主窗口先释放旧任务，poll 启动待执行的新任务，随后排队的旧 finished 清掉新任务 busy/watched 状态，使取消控件禁用。协调者用 HEAD 原实现运行新增回归，实际触发 `A late old completion cleared the active operation` 断言。现 finished 捕获原 worker，完成处理拒绝非当前 worker，关闭后忽略迟到回调及 poll；所有相关对话框复用同一处理。
 
-`scripts/smoke_managed_io.py` 使用真实 Qt 排队信号与显式安排的 QObject 交错夹具，验证新任务状态保持、后续正常结束、每代完成一次、关闭后无控件更新和待执行动作。它不模拟真实工作线程调度，也不归因为 Windows 超时。修后该回归、原生桌面、三格式引文导入及 Zotero 迁移本机检查全部通过，基线与 diff 检查通过；新增回归已接入三平台 native-gui，修复版本 CI 尚待执行结果。
+`scripts/smoke_managed_io.py` 使用真实 Qt 排队信号与显式安排的 QObject 交错夹具，验证新任务状态保持、后续正常结束、每代完成一次、关闭后无控件更新和待执行动作。它不模拟真实工作线程调度，也不归因为 Windows 超时。修后该回归、原生桌面、三格式引文导入及 Zotero 迁移本机检查全部通过，基线与 diff 检查通过；新增回归已接入三平台 native-gui。源码 `142cd77` 的 [CI 37016746142](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37016746142) 已核对六个 job 的终态 conclusion 均为 success，三平台新增回调回归步骤及 Windows 完整迁移流程成功。
 
 当前收尾交付为上述源码与回归，不继续追加导入导出格式。V1–V5、Windows ACL、凭据崩溃清理、三平台安装及实际 Zotero 内容迁移验收保持开放；CSV/EndNote/完整备份恢复和其余 Zotero 对标项不记为已完成。后续分别按产品功能与发行验收记录证据，源代码检查成功不关闭真实验收门槛。
 

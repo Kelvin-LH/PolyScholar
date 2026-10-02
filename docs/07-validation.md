@@ -4,6 +4,12 @@
 
 日期：2026-10-02；本机 macOS，Python 3.9/3.12。
 
+## 当前源码的 macOS 开发包补验（2026-10-03）
+
+源码 `142cd77` 重新构建冻结 `.app`，包内两套 CPython 3.12.14、BabelDOC 0.6.4 与 pdf2zh 1.9.11 的版本及 pip check 通过。将整包移到含空格的目录后，从空白临时工作目录、仅含 `/usr/bin:/bin` 的 PATH 启动包内可执行文件 `--smoke-test`：离屏原生窗口启动、临时文献库关闭及进程退出成功。迁移后嵌入引擎再次检查通过。
+
+本次未验证干净系统安装、冻结引文/PDF spawn 或完整迁移界面，未做 Developer ID 签名/公证，未发布下载。Windows/Linux 包与真实引擎/API、下载载荷等门槛仍待验收。开发包与合成证据保留在被 Git 忽略的 `.tools/validation-142cd77/`，不上传运行时目录或日志。
+
 ## 已验证
 
 - BabelDOC 0.6.4 与 PDFMathTranslate/pdf2zh 1.9.11 已安装到两个独立 Python 3.12 环境，环境目录被 Git 忽略。
