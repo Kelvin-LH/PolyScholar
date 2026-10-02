@@ -73,7 +73,7 @@ SQLite v5 在升级前备份 `library-before-v5.sqlite3`，保存批次模型、
 
 `import_attachment(parent_id,path,role='supplement')` 原子建立子文献和附件关系；不增加文献库主条目。相同归属重复导入保留原角色及 ID，另一归属拒绝。普通 `import_pdf` 重复导入隐藏子附件会返回所属主条目。
 
-`delete_attachment(parent_id,document_id)` 仅删除额外附件；根 PDF 必须通过 `delete_document` 删除整个条目。两种删除均检查相应子任务，且删除整个条目检查所有子附件；保留外部原文件，清理拥有的对象、任务与证据。集合和原生书目引用列表只使用根条目。读取、解析、模型摘要和翻译依旧接受对应 PDF 的独立 ID，不将子附件内容与主 PDF 混用。
+`delete_attachment(parent_id,document_id)` 仅删除额外附件；根 PDF 必须通过 `delete_document` 删除整个条目。两种删除均检查相应子任务，且删除整个条目检查所有子附件。当前 v9 的默认删除改为移入回收站；永久清理须显式调用下述 purge 接口。集合和原生书目引用列表只使用根条目。读取、解析、模型摘要和翻译依旧接受对应 PDF 的独立 ID，不将子附件内容与主 PDF 混用。
 
 v6 升级前备份 `library-before-v6.sqlite3`。当前不支持外部链接、非 PDF 附件或主 PDF 替换。
 
@@ -107,3 +107,16 @@ coverage 区分 indexed/no_text/cleared/unparsed/parse_failed；最近重解析�
 SQLite v8 升级前备份 library-before-v8.sqlite3，回填已有当前版本；索引替换与解析版本写入同事务，删除 PDF 级联删除索引。`clear_fulltext_index/rebuild_fulltext_index(document_id=None)` 只清除/重建索引，保留 IR、原文及证据；重开不会自动恢复已主动清除的索引。重建索引不掩盖最近解析失败。解析和搜索由原生桌面受管理的工作线程执行，关闭窗口等待操作结束。
 
 搜索完全本地，不执行 OCR 或模型调用，不处理图片中的不可提取文字。实现依据 [SQLite FTS5 trigram 文档](https://www.sqlite.org/fts5.html#the_trigram_tokenizer)。
+
+
+## 回收站与持久化清理（v9）
+
+`delete_document(id)` 仅接受根条目，`delete_attachment(parent_id,id)` 验证归属；默认都调用移入回收站。`trash_document(id)` 支持根/子 PDF 的独立标记。根标记隐式隐藏整个家族；`restore_document(id)` 仅移除指定标记，恢复根不移除此前独立删除的子标记。父条目仍在回收站时拒绝恢复子附件。保留元数据、文件、成员关系、IR、摘要及任务；已另行删除的集合不凭空恢复。
+
+`list_trash()` 返回显式记录与 scope/restoreBlocked；正常文献、附件、任务、摘要、引用及全文范围排除失活 PDF。更新、解析、新任务、摘要及引用操作复用 active 校验。内部文献/任务列表仍保留所有记录供导出保护和清理。重复导入回收站中的同一文件要求先恢复。
+
+`deletion_preview(id)` 返回 documentIds、counts（pdfs/notes/claims/jobs/artifacts/collections）、managedFiles、sourceFiles、explicitMarker、activeJobs、purgeAllowed。界面先预览再确认；确认文本按纯文本显示。`purge_document(id)` 只接受显式回收标记，活动任务或本机解析/摘要操作阻止删除。数据库删除、固定审计与清理计划同事务；提交之后才删除托管副本和任务目录，外部原件始终保留。
+
+SQLite 与文件系统不能共同原子提交。返回 cleanupComplete=False 表示数据库已永久删除、仍有待清理文件，不能恢复条目，也不能显示清理成功。`list_pending_cleanup()` 和 `retry_cleanup(cleanup_id=None)` 支持重启后逐项或全部重试；固定 cleanup_failed 错误码不含原始日志。清理计划保存路径、文件/目录及父目录身份和原先是否存在，每次重试核对，拒绝链接和路径替换；重新导入后仍被数据库引用的对象保留。待清理路径继续受导出防覆盖保护。
+
+v9 升级前备份 library-before-v9.sqlite3；回收标记、队列、审计触发器及版本号同事务迁移。原生回收站与全文检索复用 ManagedIODialog 和主窗口 IO 生命周期，没有额外线程管理器。此功能不自动清空回收站，不代替安装包或真实翻译验收。

@@ -5,6 +5,7 @@ from .workers import safe_error
 from .creators import CreatorsDialog
 from .searches import SearchDialog
 from .fulltext import FullTextDialog
+from .trash import TrashDialog, TrashMoveOperation
 from copy import deepcopy
 from ..metadata import APPLICABLE, legacy_creators, creator_display
 
@@ -27,7 +28,7 @@ class LibraryPage:
         controls=QHBoxLayout();self.collection_edit_button=self.button('编辑',self.edit_collection);self.collection_delete_button=self.button('删除',self.remove_collection);controls.addWidget(self.collection_edit_button);controls.addWidget(self.collection_delete_button);ol.addLayout(controls)
         self.include_children=QCheckBox('包含子集合');self.include_children.toggled.connect(self.filter_docs);ol.addWidget(self.include_children)
         ol.addWidget(QLabel('标签（可多选）'));self.tag_filter=QListWidget();self.tag_filter.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection);self.tag_filter.setMaximumHeight(160);self.tag_filter.itemSelectionChanged.connect(self.filter_docs);ol.addWidget(self.tag_filter)
-        tag_actions=QHBoxLayout();tag_actions.addWidget(self.button('重命名',self.rename_selected_tag));tag_actions.addWidget(self.button('删除标签',self.remove_selected_tag));ol.addLayout(tag_actions);ol.addWidget(self.button('清除筛选',self.clear_filters))
+        tag_actions=QHBoxLayout();tag_actions.addWidget(self.button('重命名',self.rename_selected_tag));tag_actions.addWidget(self.button('删除标签',self.remove_selected_tag));ol.addLayout(tag_actions);ol.addWidget(self.button('清除筛选',self.clear_filters));self.trash_button=self.button('回收站',self.open_trash);ol.addWidget(self.trash_button)
         split.addWidget(organize)
         self.document_list=QListWidget();self.document_list.setMinimumWidth(160);self.document_list.currentRowChanged.connect(self.select_doc);split.addWidget(self.document_list)
         inspector=QWidget();inspector.setMinimumWidth(280);f=QFormLayout(inspector);self.metadata_form=f;self.fields={};self._metadata_creators=[];self._authors_loaded=''
@@ -49,9 +50,9 @@ class LibraryPage:
         self.membership_info=QLabel('');self.membership_info.setWordWrap(True);f.addRow('所属集合',self.membership_info);self.membership_add_button=self.button('加入集合',self.add_to_collection);self.membership_remove_button=self.button('移出当前集合',self.remove_from_collection);f.addRow(self.membership_add_button);f.addRow(self.membership_remove_button);
         self.attachment_list=QListWidget();self.attachment_list.setMaximumHeight(130);self.attachment_list.currentRowChanged.connect(self.update_attachment_controls);f.addRow('PDF 附件',self.attachment_list)
         self.attachment_role=QComboBox();self.attachment_role.addItem('补充材料','supplement');self.attachment_role.addItem('已有译文','translation');f.addRow('导入附件类型',self.attachment_role)
-        self.attachment_add_button=self.button('添加 PDF 附件',self.add_attachment);self.attachment_read_button=self.button('阅读选中附件',self.read_attachment);self.attachment_delete_button=self.button('删除选中附件',self.remove_attachment)
+        self.attachment_add_button=self.button('添加 PDF 附件',self.add_attachment);self.attachment_read_button=self.button('阅读选中附件',self.read_attachment);self.attachment_delete_button=self.button('附件移至回收站',self.remove_attachment)
         f.addRow(self.attachment_add_button);f.addRow(self.attachment_read_button);f.addRow(self.attachment_delete_button)
-        f.addRow(self.button('保存条目',self.save_doc,True));self.read_button=self.button('阅读文献',self.open_original);f.addRow(self.read_button);f.addRow(self.button('删除条目',self.delete_doc))
+        f.addRow(self.button('保存条目',self.save_doc,True));self.read_button=self.button('阅读文献',self.open_original);f.addRow(self.read_button);f.addRow(self.button('移至回收站',self.delete_doc))
         inspector_scroll=QScrollArea();inspector_scroll.setWidgetResizable(True);inspector_scroll.setWidget(inspector);inspector_scroll.setMinimumWidth(300)
         split.addWidget(inspector_scroll);split.setSizes([210,520,300]);l.addWidget(split,1)
         self.empty=QLabel('还没有文献，请先导入本地 PDF。');self.empty.setObjectName('muted');l.addWidget(self.empty)
@@ -294,15 +295,29 @@ class LibraryPage:
         if dialog.exec()==QDialog.DialogCode.Accepted:
             self._metadata_creators=dialog.creators();self._authors_loaded='; '.join(creator_display(c) for c in self._metadata_creators if c['role']=='author');self.fields['authors'].setText(self._authors_loaded);self.update_creator_info()
 
+    def open_trash(self):
+        if self.io_worker is not None or self._closing:
+            return
+        if hasattr(self,'trash_dialog') and not self.trash_dialog._closed:
+            self.trash_dialog.show()
+            self.trash_dialog.raise_()
+            self.trash_dialog.activateWindow()
+            self.trash_dialog.refresh()
+            return
+        self.trash_dialog=TrashDialog(self)
+        self.trash_dialog.show()
+        self.trash_dialog.refresh()
+
+    def move_to_trash(self,identifier):
+        # 确认和写入共享窗口 IO；预览不是删除成功的证据。
+        # Confirmation and mutation share window IO; a preview never proves deletion.
+        self._trash_operation=TrashMoveOperation(self,identifier)
+        self._trash_operation.start()
+
     def delete_doc(self):
-        d=self.selected()
-        if not d or self.io_worker is not None or self._closing:return
-        if QMessageBox.question(self,'删除条目','删除本地条目及所有 PDF 附件、翻译任务、摘要和笔记？原始导入文件不受影响。')!=QMessageBox.StandardButton.Yes:return
-        identifier=d['id']
-        def ready(_):
-            if self.reader_document and (self.reader_document.get('parentDocumentId') or self.reader_document['id'])==identifier:self.clear_reader()
-            self.refresh()
-        self.run_io(lambda:self.service.delete_document(identifier),ready,'正在删除文献及附件…')
+        document=self.selected()
+        if document and self.io_worker is None and not self._closing:
+            self.move_to_trash(document['id'])
 
     def attachment_label(self,row):
         role={'original':'原文','supplement':'补充材料','translation':'已有译文'}.get(row['role'],row['role'])
@@ -351,12 +366,6 @@ class LibraryPage:
         if row and self.io_worker is None and not self._closing:self.open_document(row['documentId'])
 
     def remove_attachment(self):
-        parent=self.selected();row=self.selected_attachment()
-        if not parent or not row or row['role']=='original' or self.io_worker is not None or self._closing:return
-        message=f"删除附件“{row['filename']}”及该附件的翻译任务、摘要、证据笔记？原始导入文件和主文献保留。"
-        if QMessageBox.question(self,'删除 PDF 附件',message)!=QMessageBox.StandardButton.Yes:return
-        identifier=parent['id'];child=row['documentId']
-        def ready(_):
-            if self.reader_document and self.reader_document['id']==child:self.clear_reader()
-            self.refresh()
-        self.run_io(lambda:self.service.delete_attachment(identifier,child),ready,'正在删除附件…')
+        row=self.selected_attachment()
+        if row and row['role']!='original' and self.io_worker is None and not self._closing:
+            self.move_to_trash(row['documentId'])

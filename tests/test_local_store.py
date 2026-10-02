@@ -34,6 +34,7 @@ class StoreTests(unittest.TestCase):
         self.store.update_document(self.document['id'], {'title': 'Updated', 'notes': 'private'})
         self.assertEqual(self.store.document(self.document['id'])['title'], 'Updated')
         self.store.delete_document(self.document['id'])
+        self.store.purge_document(self.document['id'])
         self.assertTrue(self.source.exists())
         self.assertFalse(original.exists())
 

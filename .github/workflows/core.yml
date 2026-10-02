@@ -62,3 +62,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/smoke_fulltext.py
+      - name: Check recoverable trash and durable purge cleanup
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_trash.py

@@ -60,18 +60,20 @@ def main():
                 window.start_job();assert start.call_args.args[0]==child['id']
             assert window.citation_items.count()==1
             window.attachment_list.setCurrentRow(1)
-            with patch.object(QMessageBox,'question',return_value=QMessageBox.StandardButton.No):window.remove_attachment()
+            with patch('polyscholar.ui.trash.plain_question',return_value=False):
+                window.remove_attachment();wait_until(lambda:window.io_worker is None and window._trash_operation._closed)
             assert len(service.list_attachments(parent['id']))==3
-            with patch.object(QMessageBox,'question',return_value=QMessageBox.StandardButton.Yes) as confirmation:
-                window.remove_attachment();wait_until(lambda:window.io_worker is None)
-                assert '摘要、证据笔记' in confirmation.call_args.args[2]
+            with patch('polyscholar.ui.trash.plain_question',return_value=True) as confirmation:
+                window.remove_attachment();wait_until(lambda:window.io_worker is None and window._trash_operation._closed)
+                assert '回收站' in confirmation.call_args.args[2]
             assert len(service.list_attachments(parent['id']))==2 and supplement.is_file()
             assert window.task_doc.findData(child['id'])==-1 and window.evidence_doc.findData(child['id'])==-1
             assert len(service.list_documents())==1 and window.attachment_list.item(0).data(Qt.ItemDataRole.UserRole)['role']=='original'
             window.attachment_list.setCurrentRow(0);assert not window.attachment_delete_button.isEnabled()
-            # Removing a root while its remaining child is open clears stale PDF buffers and selectors.
-            with patch.object(QMessageBox,'question',return_value=QMessageBox.StandardButton.Yes):
-                window.delete_doc();wait_until(lambda:window.io_worker is None)
+            # 移至回收站时清空阅读中的家族 PDF。
+            # Trashing a root clears the open family PDF and selectors.
+            with patch('polyscholar.ui.trash.plain_question',return_value=True):
+                window.delete_doc();wait_until(lambda:window.io_worker is None and window._trash_operation._closed)
             assert not service.list_documents() and window.reader_document is None and window.reader_source.count()==0
         finally:
             window.close();service.close()

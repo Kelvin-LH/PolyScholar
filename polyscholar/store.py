@@ -19,9 +19,10 @@ from .exports import atomic_export
 from .instance import LibraryLock
 from .searches import SearchLibrary, SEARCH_SCHEMA
 from .fulltext import FulltextLibrary, FULLTEXT_SCHEMA, index_current_ir
+from .trash import TrashLibrary, TRASH_SCHEMA
 from .metadata import BIB_FIELDS, metadata_patch
 
-AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt'})
+AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt','document_trashed','document_restored','purge_cleanup'})
 
 MAX_PDF = 100 * 1024 * 1024
 SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeldoc',
@@ -30,7 +31,7 @@ SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeld
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
 
-class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLibrary, AttachmentLibrary):
+class LocalStore(TrashLibrary, FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLibrary, AttachmentLibrary):
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -53,7 +54,7 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
         self.objects.mkdir(exist_ok=True)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version > 8:
+            if version > 9:
                 raise ValueError('本地数据库来自更新版本，请升级应用。')
             if version == 1:
                 backup = self.root / 'library-before-v2.sqlite3'
@@ -125,6 +126,16 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
                         target.close()
                     if os.name == 'posix':
                         backup.chmod(0o600)
+            if version in range(1, 9):
+                backup = self.root / 'library-before-v9.sqlite3'
+                if not backup.exists():
+                    target = sqlite3.connect(backup)
+                    try:
+                        db.backup(target)
+                    finally:
+                        target.close()
+                    if os.name == 'posix':
+                        backup.chmod(0o600)
             db.executescript('''
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS desktop_documents(id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, data TEXT NOT NULL);
@@ -139,7 +150,7 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
                     PRIMARY KEY(document_id,collection_id));
                 CREATE INDEX IF NOT EXISTS desktop_memberships_collection ON desktop_memberships(collection_id);
             ''')
-            db.executescript('BEGIN IMMEDIATE;\n' + IR_SCHEMA + '\n' + ATTACHMENT_SCHEMA + '\n' + SEARCH_SCHEMA + '\n' + FULLTEXT_SCHEMA)
+            db.executescript('BEGIN IMMEDIATE;\n' + IR_SCHEMA + '\n' + ATTACHMENT_SCHEMA + '\n' + SEARCH_SCHEMA + '\n' + FULLTEXT_SCHEMA + '\n' + TRASH_SCHEMA)
             if version < 8:
                 for row in db.execute('SELECT document_id FROM desktop_ir_current').fetchall():
                     index_current_ir(db, row[0])
@@ -149,7 +160,7 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
                 db.execute(f"CREATE TRIGGER IF NOT EXISTS desktop_audit_validate_{action.lower()} BEFORE {action} ON desktop_audit "
                            f"WHEN NEW.point NOT IN ({values}) OR NEW.outcome NOT IN ('succeeded','failed') "
                            "BEGIN SELECT RAISE(ABORT, 'Invalid audit event'); END")
-            db.execute('PRAGMA user_version=8')
+            db.execute('PRAGMA user_version=9')
         for job in self.list_jobs():
             if job['state'] in ('queued', 'running'):
                 job.update(state='failed', error='上次退出时任务未完成，请重新提交；远程请求可能已计费。')
@@ -217,6 +228,7 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
                     row = db.execute('SELECT data FROM desktop_documents WHERE sha256=?', (digest,)).fetchone()
                     if row:
                         existing = json.loads(row[0])
+                        self.require_active(existing['id'], db)
                         owner = db.execute('SELECT parent_document_id FROM desktop_attachment_links WHERE child_document_id=?',
                                            (existing['id'],)).fetchone()
                         if parent_id is not None:
@@ -279,6 +291,7 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
             elif len(value.encode('utf-8')) > 65536:
                 raise ValueError('每个文献元数据字段不能超过 64 KiB。')
         with self.lock:
+            self.require_active(document_id)
             document = self.document(document_id)
             document = metadata_patch(document, patch)
             if not document['title'].strip():
@@ -291,38 +304,10 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
         with self.lock:
             with self.connection() as db:
                 self._require_root(db, document_id)
-                children = [row[0] for row in db.execute(
-                    'SELECT child_document_id FROM desktop_attachment_links WHERE parent_document_id=?', (document_id,))]
-            self._delete_documents([document_id, *children])
-
-    def _delete_documents(self, document_ids):
-        with self.lock:
-            documents = [self.document(identifier) for identifier in document_ids]
-            jobs = [j for j in self.list_jobs() if j['documentId'] in document_ids]
-            slots = ','.join('?' for _ in document_ids)
-            with self.connection() as db:
-                db.execute('BEGIN IMMEDIATE')
-                if db.execute(f"SELECT 1 FROM desktop_jobs WHERE document_id IN ({slots}) AND state IN ('queued','running')",
-                              document_ids).fetchone():
-                    raise ValueError('请等待当前翻译任务结束后删除。')
-                db.execute(f'DELETE FROM desktop_jobs WHERE document_id IN ({slots})', document_ids)
-                db.execute(f'DELETE FROM desktop_documents WHERE id IN ({slots})', document_ids)
-                unused = [document for document in documents if not db.execute(
-                    'SELECT 1 FROM desktop_documents WHERE sha256=?', (document['sha256'],)).fetchone()]
-                db.execute('INSERT INTO desktop_audit(point,outcome,created_at) VALUES(?,?,?)',
-                           ('document_deleted', 'succeeded', timestamp()))
-            for document in unused:
-                path = self.object_path(document)
-                if os.name == 'nt' and path.exists():
-                    path.chmod(stat.S_IWRITE)
-                path.unlink(missing_ok=True)
-            import shutil
-            for job in jobs:
-                output = self.output_path(job)
-                if output.name == job['id'] and output.parent.name == 'jobs':
-                    shutil.rmtree(output, ignore_errors=True)
+            return self.trash_document(document_id)
 
     def read_pdf(self, document_id):
+        self.require_active(document_id)
         return self.read_bounded_pdf(self.object_path(self.document(document_id)))
 
     @staticmethod
@@ -416,19 +401,23 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
 
     def put_job(self, job):
         with self.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if job['state'] in ('queued', 'running'):
+                self.require_active(job['documentId'], db)
             db.execute('INSERT INTO desktop_jobs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,data=excluded.data',
                        (job['id'], job['documentId'], job['state'], json.dumps(job, ensure_ascii=False)))
 
     def new_job(self, document_id, engine):
         if engine not in ('babeldoc', 'pdfmathtranslate'):
             raise ValueError('不支持的翻译引擎。')
-        self.document(document_id)
+        self.require_active(document_id)
         identifier = str(uuid.uuid4())
         output = self.prepare_cache(self.get_settings()['cachePath']) / 'jobs' / identifier
         job = dict(id=identifier, documentId=document_id, engine=engine, state='queued', createdAt=timestamp(),
                    error=None, artifacts=[], outputDir=str(output), timeoutSeconds=self.get_settings()['timeoutSeconds'])
         with self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
+            self.require_active(document_id, db)
             if db.execute("SELECT 1 FROM desktop_jobs WHERE state IN ('queued','running')").fetchone():
                 raise ValueError('首版同时仅运行一个翻译任务，请等待当前任务结束。')
             db.execute('INSERT INTO desktop_jobs VALUES(?,?,?,?)', (identifier, document_id, 'queued', json.dumps(job)))
@@ -439,6 +428,8 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
 
     def artifact_path(self, job_id, artifact_index):
         job = next((j for j in self.list_jobs() if j['id'] == job_id), None)
+        if job:
+            self.require_active(job['documentId'])
         if not job or job['state'] != 'completed':
             raise ValueError('翻译任务尚未成功完成。')
         if type(artifact_index) is not int or not 0 <= artifact_index < len(job['artifacts']):
@@ -461,13 +452,16 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
         return path
 
     def write_export(self, destination, data, extra_protected=()):
+        with self.connection() as db:
+            pending_roots = [Path(entry['path']) for row in db.execute('SELECT paths FROM desktop_purge_cleanup')
+                             for entry in json.loads(row[0])]
         documents=self.list_documents()
         originals=[path for document in documents for path in document.get('sourcePaths',[])]
         protected=[*self.objects.glob('*.pdf'), *self.root.glob('*.sqlite3*')]
         for job in self.list_jobs():
             protected.extend(self.output_path(job).glob('*.pdf'))
         return atomic_export(destination,data,
-            protected_roots=[self.root,*extra_protected,*[self.output_path(job) for job in self.list_jobs()]],
+            protected_roots=[self.root,*extra_protected,*pending_roots,*[self.output_path(job) for job in self.list_jobs()]],
             protected_files=protected, original_paths=originals,original_hashes={document['sha256'] for document in documents})
 
     def export_translation(self, job_id, artifact_index, destination):

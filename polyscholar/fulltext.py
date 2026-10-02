@@ -111,8 +111,9 @@ class FulltextLibrary:
             raise ValueError('文献标识无效。')
         with self.lock, self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
-            identifiers = [document_id] if document_id else [r[0] for r in db.execute('SELECT id FROM desktop_documents')]
+            identifiers = [document_id] if document_id else [r[0] for r in db.execute('SELECT id FROM desktop_documents') if self.is_active(r[0], db)]
             for identifier in identifiers:
+                self.require_active(identifier, db)
                 if not db.execute('SELECT 1 FROM desktop_documents WHERE id=?',(identifier,)).fetchone():
                     raise ValueError('文献不存在。')
                 if rebuild:
@@ -146,7 +147,7 @@ class FulltextLibrary:
                 for identifier,raw,parent,revision,status,last_parse,error,blocks,pages,indexed in rows:
                     _check_deadline(deadline)
                     parent=parent or identifier
-                    if parent not in root_ids:continue
+                    if parent not in root_ids or not self.is_active(identifier, db):continue
                     doc=json.loads(raw);family[identifier]=parent;titles[identifier]=doc
                     actual_status = status or ('unparsed' if not revision else 'cleared')
                     if not revision and last_parse=='failed':actual_status='parse_failed'

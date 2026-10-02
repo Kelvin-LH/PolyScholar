@@ -55,6 +55,7 @@ class FulltextVectorTests(unittest.TestCase):
         self.assertEqual([hit['revisionId'] for hit in hits], [latest['id']])
         self.service.delete_attachment(self.parent['id'], self.child['id'])
         self.service.delete_document(self.parent['id'])
+        self.service.purge_document(self.parent['id'])
         self.assertEqual(self.service.search_fulltext('current')['total'], 0)
 
     def test_large_block_returns_bounded_original_excerpt(self):

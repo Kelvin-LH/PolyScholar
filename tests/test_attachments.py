@@ -113,6 +113,7 @@ class AttachmentTests(unittest.TestCase):
         job['state'] = 'completed';self.store.put_job(job)
         output=self.store.output_path(job);output.mkdir(parents=True);(output/'result.pdf').write_bytes(b'%PDF-1.7 translated')
         self.service.delete_document(self.parent['id'])
+        self.service.purge_document(self.parent['id'])
         self.assertEqual(self.store.list_documents(), [])
         self.assertEqual(self.store.list_jobs(), [])
         self.assertFalse(output.exists())
@@ -127,6 +128,7 @@ class AttachmentTests(unittest.TestCase):
         a = self.service.import_attachment(self.parent['id'],self.pdf('a.pdf',b'a'))
         b = self.service.import_attachment(self.parent['id'],self.pdf('b.pdf',b'b'),'translation')
         self.service.delete_attachment(self.parent['id'], a['id'])
+        self.service.purge_document(a['id'])
         self.assertEqual([row['id'] for row in self.service.list_attachments(self.parent['id'])], [self.parent['id'],b['id']])
         self.assertTrue(self.store.object_path(self.parent).exists())
         self.assertTrue(self.store.object_path(b).exists())
@@ -152,7 +154,7 @@ class AttachmentTests(unittest.TestCase):
         self.assertEqual(store.list_root_documents()[0]['id'],parent_id)
         self.assertEqual(store.read_pdf(parent_id),self.original.read_bytes())
         with store.connection() as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],8)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],9)
         with closing(sqlite3.connect(self.root/'data/library-before-v6.sqlite3')) as db:
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],5)
             self.assertEqual(db.execute('SELECT id FROM desktop_documents').fetchone()[0],parent_id)

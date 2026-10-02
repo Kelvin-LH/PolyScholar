@@ -24,6 +24,7 @@ class CollectionLibrary:
                 SELECT c.id,c.name,c.parent_id,COUNT(m.document_id) FROM desktop_collections c
                 LEFT JOIN desktop_memberships m ON m.collection_id=c.id
                   AND NOT EXISTS(SELECT 1 FROM desktop_attachment_links a WHERE a.child_document_id=m.document_id)
+                  AND NOT EXISTS(SELECT 1 FROM desktop_trash t WHERE t.document_id=m.document_id)
                 GROUP BY c.id ORDER BY c.name COLLATE NOCASE,c.id
             ''')]
 
@@ -106,6 +107,8 @@ class CollectionLibrary:
         with self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
             for identifier, raw in db.execute('SELECT id,data FROM desktop_documents').fetchall():
+                if not self.is_active(identifier, db):
+                    continue
                 document = json.loads(raw)
                 tags = document.get('tags', [])
                 if old not in tags:
@@ -140,7 +143,7 @@ class CollectionLibrary:
                 rows = db.execute('SELECT data FROM desktop_documents ORDER BY rowid DESC')
             documents = [json.loads(row[0]) for row in rows]
             children = {row[0] for row in db.execute('SELECT child_document_id FROM desktop_attachment_links')}
-            documents = [document for document in documents if document['id'] not in children]
+            documents = [document for document in documents if document['id'] not in children and self.is_active(document['id'], db)]
         needle = text.strip().casefold()
         return [document for document in documents if required.issubset(set(document.get('tags', []))) and
                 (not needle or needle in ' '.join(str(document.get(key, '')) for key in

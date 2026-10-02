@@ -128,6 +128,7 @@ class FulltextTests(unittest.TestCase):
         result=self.service.search_fulltext('searchable PDF')
         self.assertEqual(result['total'],1);self.assertEqual(result['items'][0]['page'],1)
         self.service.delete_document(doc['id'])
+        self.service.purge_document(doc['id'])
         self.assertEqual(self.service.search_fulltext('searchable PDF')['total'],0)
         with self.service.store.connection() as db:
             db.execute("INSERT INTO desktop_fulltext_fts(desktop_fulltext_fts,rank) VALUES('integrity-check',1)")

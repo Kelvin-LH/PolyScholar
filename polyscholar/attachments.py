@@ -22,8 +22,8 @@ BEGIN SELECT RAISE(ABORT, 'Attachments must belong directly to a root document')
 
 
 class AttachmentLibrary:
-    @staticmethod
-    def _require_root(db, parent_id):
+    def _require_root(self, db, parent_id):
+        self.require_active(parent_id, db)
         if not db.execute('SELECT 1 FROM desktop_documents WHERE id=?', (parent_id,)).fetchone():
             raise ValueError('文献不存在。')
         if db.execute('SELECT 1 FROM desktop_attachment_links WHERE child_document_id=?', (parent_id,)).fetchone():
@@ -33,6 +33,7 @@ class AttachmentLibrary:
         with self.connection() as db:
             return [json.loads(row[0]) for row in db.execute('''SELECT d.data FROM desktop_documents d
                 WHERE NOT EXISTS(SELECT 1 FROM desktop_attachment_links a WHERE a.child_document_id=d.id)
+                AND NOT EXISTS(SELECT 1 FROM desktop_trash t WHERE t.document_id=d.id)
                 ORDER BY d.rowid DESC''')]
 
     def list_attachments(self, parent_id):
@@ -43,6 +44,7 @@ class AttachmentLibrary:
                        'role': 'original', 'label': root['filename']}]
             for raw, role, label in db.execute('''SELECT d.data,a.role,a.label FROM desktop_attachment_links a
                     JOIN desktop_documents d ON d.id=a.child_document_id WHERE a.parent_document_id=?
+                    AND NOT EXISTS(SELECT 1 FROM desktop_trash t WHERE t.document_id=d.id)
                     ORDER BY d.rowid''', (parent_id,)):
                 document = json.loads(raw)
                 result.append({**document, 'documentId': document['id'], 'parentDocumentId': parent_id,
@@ -65,4 +67,4 @@ class AttachmentLibrary:
                 if not db.execute('SELECT 1 FROM desktop_attachment_links WHERE parent_document_id=? AND child_document_id=?',
                                   (parent_id, document_id)).fetchone():
                     raise ValueError('附件不属于该文献。')
-            self._delete_documents([document_id])
+            return self.trash_document(document_id)

@@ -60,6 +60,7 @@ class LocalService:
         self._key = ''
         self._lock = threading.RLock()
         self._children = {}
+        self._child_documents = {}
         self._threads = {}
         self._closed = False
         self._subscribers = []
@@ -120,7 +121,9 @@ class LocalService:
         return self.store.import_attachment(parent_id, path, role)
 
     def delete_attachment(self, parent_id, document_id):
-        return self.store.delete_attachment(parent_id, document_id)
+        with self._lock:
+            self._require_idle_workers(document_id)
+            return self.store.delete_attachment(parent_id, document_id)
 
     def search_fulltext(self, text, **criteria):
         return self.store.search_fulltext(text, **criteria)
@@ -132,6 +135,7 @@ class LocalService:
         return self.store.rebuild_fulltext_index(document_id)
 
     def parse_document(self, document_id):
+        self.store.require_active(document_id)
         try:
             return self._parse_document(document_id)
         except Exception:
@@ -160,7 +164,9 @@ class LocalService:
                     raise ValueError('应用正在关闭。')
                 child = subprocess.Popen([str(python), '-I', str(worker)], env=environment(),
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                self.store.require_active(document_id)
                 self._children[identifier] = child
+                self._child_documents[identifier] = document_id
             request = json.dumps({'source': str(self.store.object_path(document)), 'sha256': document['sha256']}).encode('utf-8')
             raw, _ = child.communicate(request+b'\n', timeout=120)
             if child.returncode or len(raw) > 16*1024*1024+1:
@@ -190,21 +196,27 @@ class LocalService:
                         stream.close()
             with self._lock:
                 self._children.pop(identifier, None)
+                self._child_documents.pop(identifier, None)
 
     def current_document_ir(self, document_id):
+        self.store.require_active(document_id)
         return self.store.current_document_ir(document_id)
 
     def document_blocks(self, document_id, revision_id=None):
+        self.store.require_active(document_id)
         return self.store.document_blocks(document_id, revision_id)
 
     def save_claim(self, document_id, text, evidence):
+        self.store.require_active(document_id)
         return self.store.save_claim(document_id, text, evidence)
 
     def list_claims(self, document_id):
+        self.store.require_active(document_id)
         return self.store.list_claims(document_id)
 
     def summarize_document(self, document_id, block_ids, revision_id=None, expected_settings=None):
         """Send only explicitly selected current blocks; atomically save checked claims."""
+        self.store.require_active(document_id)
         with self._lock:
             if self._closed:
                 raise ValueError('应用正在关闭。')
@@ -231,10 +243,13 @@ class LocalService:
             with self._lock:
                 if self._closed:
                     raise ValueError('应用正在关闭。')
+                self.store.require_active(document_id)
                 self._children[identifier] = child
+                self._child_documents[identifier] = document_id
         def finished(child):
             with self._lock:
                 self._children.pop(identifier, None)
+                self._child_documents.pop(identifier, None)
         claims, usage = request_summary(address, token, settings['model'], settings['targetLanguage'], blocks,
             min(settings['timeoutSeconds'], 120), python_path=python,
             worker_path=self.resources / 'integrations/summary_worker.py', on_spawn=started, on_done=finished)
@@ -260,6 +275,7 @@ class LocalService:
         return self.store.set_membership(document_id, collection_id, present)
 
     def document_collections(self, document_id):
+        self.store.require_active(document_id)
         return self.store.document_collections(document_id)
 
     def list_tags(self):
@@ -292,8 +308,47 @@ class LocalService:
     def update_document(self, document_id, patch):
         return self.store.update_document(document_id, patch)
 
+    def _require_idle_workers(self, document_id):
+        scope = set(self.store.deletion_preview(document_id)['documentIds'])
+        jobs = {job['id']: job['documentId'] for job in self.store.list_jobs()}
+        if any(thread.is_alive() and jobs.get(key) in scope for key, thread in self._threads.items()):
+            raise ValueError('请等待翻译任务完全结束后操作。')
+        if any(identifier in scope and self._children.get(key) is not None
+               and self._children[key].poll() is None
+               for key, identifier in self._child_documents.items()):
+            raise ValueError('请等待文献解析或摘要任务结束后操作。')
+
+    def trash_document(self, document_id):
+        with self._lock:
+            self._require_idle_workers(document_id)
+            return self.store.trash_document(document_id)
+
+    def restore_document(self, document_id):
+        with self._lock:
+            self._require_idle_workers(document_id)
+            return self.store.restore_document(document_id)
+
+    def purge_document(self, document_id):
+        with self._lock:
+            self._require_idle_workers(document_id)
+            return self.store.purge_document(document_id)
+
+    def list_trash(self):
+        return self.store.list_trash()
+
+    def deletion_preview(self, document_id):
+        return self.store.deletion_preview(document_id)
+
+    def list_pending_cleanup(self):
+        return self.store.list_pending_cleanup()
+
+    def retry_cleanup(self, cleanup_id=None):
+        return self.store.retry_cleanup(cleanup_id)
+
     def delete_document(self, document_id):
-        return self.store.delete_document(document_id)
+        with self._lock:
+            self._require_idle_workers(document_id)
+            return self.store.delete_document(document_id)
 
     def read_pdf(self, document_id):
         return self.store.read_pdf(document_id)
@@ -367,9 +422,10 @@ class LocalService:
             raise ValueError('无法获取模型列表，请检查模型地址、密钥与网络；该服务可能未提供 /models，可手动填写模型名。') from None
 
     def list_jobs(self):
-        return self.store.list_jobs()
+        return [job for job in self.store.list_jobs() if self.store.is_active(job['documentId'])]
 
     def start_translation(self, document_id, pages=''):
+        self.store.require_active(document_id)
         if not isinstance(pages, str) or len(pages) > 4096:
             raise ValueError('页码范围无效。')
         if pages:
@@ -512,6 +568,8 @@ class LocalService:
         identifiers = [document_ids] if isinstance(document_ids, str) else document_ids
         if not isinstance(identifiers, list) or any(not isinstance(value, str) for value in identifiers):
             raise ValueError('文献导出列表无效。')
+        for identifier in identifiers:
+            self.store.require_active(identifier)
         documents = [self.store.document(value) for value in dict.fromkeys(identifiers)]
         if any(document.get('parentDocumentId') for document in documents):
             raise ValueError('附件不能单独导出引用，请选择所属文献。')
