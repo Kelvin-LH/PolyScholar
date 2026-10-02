@@ -159,7 +159,9 @@ class WindowsJobTests(unittest.TestCase):
         self.release(middle)
         child = self.hold_process(self.wait_file(marker))
         outer.terminate(timeout=5)
-        self.assertIsNotNone(middle.poll())
+        # ActiveProcesses can reach zero before the process HANDLE is signaled.
+        # 活动计数归零不等于句柄已立即就绪，仍须有界等待真实进程退出。
+        self.assertEqual(middle.wait(timeout=5), 1)
         self.assertEqual(self.api.WaitForSingleObject(child, 5000), 0)
 
 

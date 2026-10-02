@@ -16,6 +16,8 @@
 
 最终本机全套223项通过（24.849秒，8项 Windows 专项按平台跳过），基线/编译/diff检查通过。已核对远端仍为 `84fbe08`，上一轮冻结 CI 成功不作为此次进程改动的证据。本轮不发布安装包；新 Windows 强杀、嵌套 Job、原始 stdin 字节、绑定失败与显式资源脚本测试等待新提交 CI。
 
+源码 `f0d62a2` 的 [首轮 CI 37068148940](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37068148940) 中 Windows core 实际运行223项（7项其他平台向量跳过），唯一失败为嵌套 Job 测试在终止后立即断言 `middle.poll()` 非空；其他7项 Windows 新增专项实际成功。改为在5秒内 `middle.wait()` 确认真实退出并核对终止退出码，同时保留叶进程真实 HANDLE 的有界退出验证。微软说明 [TerminateProcess 对其他进程的终止为异步](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess)，该修改保留实际退出门槛，不把活动计数归零当作句柄瞬时就绪。生产 `WindowsProcess.stop()` 原已包含 Job 查询后的进程等待；重跑 Windows 结果待确认。
+
 ## 本地引文导入复核
 
 本轮基线 `e622af9` 的 [CI 36967647723](https://github.com/Kelvin-LH/PolyScholar/actions/runs/36967647723) 已确认六项成功。此前没有引文导入接口/原生入口；新增BibTeX、RIS、CSL-JSON显式格式与选条目导入，四类型、字段/作者顺序、日期及损失警告共用既有书目规则。成熟纯Python解析依赖固定，完整第三方许可已保留；无文件关系不生成附件或下载源URL。
