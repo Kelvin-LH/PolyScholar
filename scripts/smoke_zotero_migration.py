@@ -18,12 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests'))
 
 
 def wait(predicate, timeout=20):
-    from PySide6.QtTest import QTest
+    from native_wait import wait_for
 
-    deadline = time.monotonic() + timeout
-    while not predicate() and time.monotonic() < deadline:
-        QTest.qWait(10)
-    assert predicate(), 'Zotero migration UI did not settle'
+    wait_for(predicate, timeout, 'Zotero migration UI did not settle')
 
 
 def idle(window, dialog):

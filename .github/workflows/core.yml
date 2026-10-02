@@ -40,6 +40,10 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m polyscholar --smoke-test
+      - name: Check native observation of background workers and failures
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_native_wait.py
       - name: Check local native workflows with synthetic data
         env:
           QT_QPA_PLATFORM: offscreen
