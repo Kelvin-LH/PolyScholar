@@ -20,6 +20,14 @@
 
 源码 `b3cf329` 的 [CI 37003196865](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37003196865) 已确认六项全部成功，Windows/macOS/Linux core与native-gui实际完成，包含新引文流程及spawn解析。该证据不替代真实冻结安装包或Zotero应用生成资料库的迁移验收。
 
+## 修正后 CI：Windows 后续导入收尾尚未通过
+
+源码 `973b9af` 的 [CI 37013562227](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37013562227) 已实际完成：五项成功，Windows native失败。三平台core均执行209项并成功（macOS97.814秒、Linux43.687秒、Windows96.563秒且7项按平台跳过）；启动/挂起/取消/关闭及迁移崩溃恢复相关行已核对成功。macOS与Linux的完整原生流程成功。
+
+Windows新失败位于迁移脚本line107：首次预览已经成功，点击迁移后的idle40秒未settle。该阶段包括实际导入与自动读取收据，现有日志不足以确认在哪个阶段；不能称为原20秒预览问题，也不据此宣称代码死锁或环境慢磁盘。清理pending会直接返回结果，源码未发现以此无限重试的循环。独立只读审查指出finished未绑定具体worker有理论状态竞态，但未证明为本故障。
+
+新增只在检查失败时输出固定IO/对话框/校验进程状态及有限Python调用位置，用于Windows实际定位；不输出变量、环境、内容或原始错误，不增加生产时限，不延长检查预算。正常本机原生流程重跑通过，诊断源码CI待推送后执行。步骤status=completed只表示结束，必须读取step/job conclusion才可报告成功。本轮曾误报Windows步骤通过，已在聊天纠正，并保留最终失败状态。
+
 ## 迁移增量三平台 CI 时序复核
 
 源码 `a8c5cd2` 的 [CI 37011876844](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37011876844) 首轮三项通过（Linux core/native、Windows core），三项失败：macOS core 的0.5秒超时测试未生成进入挂起目标的marker；macOS/Windows native均在初次预览idle20秒到期。Windows core实际通过迁移资源及进程崩溃恢复，但不等同Windows ACL或安装验收。

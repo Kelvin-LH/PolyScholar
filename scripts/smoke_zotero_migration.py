@@ -5,6 +5,8 @@ Native migration regression with a synthetic library, not real Zotero/package ac
 """
 from pathlib import Path
 import sys
+import json
+import traceback
 import sqlite3
 import tempfile
 import time
@@ -32,8 +34,33 @@ def wait(predicate, timeout=20):
 def idle(window, dialog):
     # 后端预算30秒；观察期限覆盖进程回收及Qt排队，不能先于业务预算失败。
     # Observe the full domain budget plus process cleanup and queued Qt completion.
-    wait(lambda: window.io_worker is None and not dialog._busy and dialog._pending_action is None,
-         timeout=ZoteroMigrationPolicy.timeout_seconds + 10)
+    try:
+        wait(lambda: window.io_worker is None and not dialog._busy and dialog._pending_action is None,
+             timeout=ZoteroMigrationPolicy.timeout_seconds + 10)
+    except AssertionError:
+        def worker_flag(worker, method):
+            if worker is None:
+                return None
+            try:
+                return getattr(worker, method)()
+            except RuntimeError:
+                return 'deleted'
+        state=dict(ioPresent=window.io_worker is not None, ioRunning=worker_flag(window.io_worker, 'isRunning'),
+                   ioFinished=worker_flag(window.io_worker, 'isFinished'),
+                   dialogBusy=dialog._busy, watchedPresent=dialog._watched_worker is not None,
+                   watchedRunning=worker_flag(dialog._watched_worker, 'isRunning'),
+                   watchedIsCurrent=dialog._watched_worker is window.io_worker,
+                   pending=dialog._pending_action is not None, imported=dialog._imported,
+                   dialogClosed=dialog._closed, windowClosing=window._closing,
+                   validatorWorkers=len(window.service._zotero_importer._pdf_validator._workers))
+        print('Native migration timeout state:', json.dumps(state), flush=True)
+        # 只输出合成检查的调用位置；不包含变量、环境或源文件内容。
+        # Emit synthetic-check call locations only, without locals, environment or source contents.
+        for frame in list(sys._current_frames().values())[:16]:
+            positions=[(Path(item.filename).name, item.lineno, item.name)
+                       for item in traceback.extract_stack(frame, limit=16)]
+            print('Native migration timeout stack:', json.dumps(positions), flush=True)
+        raise
 
 
 def main():
