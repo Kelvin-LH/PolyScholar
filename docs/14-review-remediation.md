@@ -20,7 +20,15 @@
 
 源码 `b3cf329` 的 [CI 37003196865](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37003196865) 已确认六项全部成功，Windows/macOS/Linux core与native-gui实际完成，包含新引文流程及spawn解析。该证据不替代真实冻结安装包或Zotero应用生成资料库的迁移验收。
 
-## 最新阶段收尾：六项 CI 成功与回调归属修复
+## 冻结包内导入与子进程检查（2026-10-03）
+
+源码 `a7218fc` 新增共用离线检查类及维护者 `--smoke-test-imports` 入口：只创建临时合成资料，不打开默认文献库、不联网。实际验证带文本 PDF 导入及 IR 提取、BibTeX/RIS/CSL-JSON 三格式真实预览和原子导入、独立 spawn PDF 校验及损坏 PDF 拒绝，重开库核对4个根条目、3个引文标题、唯一真实 PDF、1页 IR 原文。关闭后无新增存活 multiprocessing 子进程；Windows 无 stdout 时仍执行检查。
+
+本机重新构建该源码的 macOS arm64 冻结包，最终包前缀内引擎版本/依赖与原生启动成功。使用包内实际可执行文件，在临时工作目录和仅 OS 目录的 PATH 下执行离线检查，全部阶段成功；将整包移入含中文和空格的目录后，两项冻结检查再次成功。此次证明冻结引文解析/迁移 PDF 校验子进程，以及包内独立 Python 的实际 PDF 文本提取可用，不将源码入口成功替代包内执行。构建脚本现在要求两项实际检查通过后才写入 manifest 的 `frozen_gui_startup_verified` / `local_import_checks_verified`；真实非零可执行文件已验证会被拒绝。
+
+构建及迁移检查均退出0，包与合成证据保留在 Git 忽略的 `.tools/validation-a7218fc/`。三平台源码 [CI 37018572031](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37018572031) 已核对六个 job 终态 conclusion 全部成功，新增离线入口步骤在三平台成功。Windows/Linux 冻结包、完整迁移 GUI、真实 Zotero 应用资料、真实翻译/API、干净系统安装、签名公证和 V1–V5 等既定门槛继续开放；未发布安装包下载。
+
+## 前一阶段：六项 CI 成功与回调归属修复
 
 2026-10-03 本机发行准备补证：从 `142cd77` 重新构建 macOS arm64 冻结开发包，非复用旧 `.app`。最终包前缀内 BabelDOC 0.6.4、pdf2zh 1.9.11 与两套 CPython 3.12.14 的版本及 pip check 实际通过；整个 `.app` 移到含空格的新目录后，使用仅 `/usr/bin:/bin` 的 PATH、空白临时工作目录和临时文献库运行实际冻结可执行文件 `--smoke-test`，退出码0并输出原生 GUI 成功。迁移后的两套嵌入运行时再次版本/pip check 成功，证明本次检查无需 PATH 上的外部 Python。
 
