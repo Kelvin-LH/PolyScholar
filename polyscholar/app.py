@@ -101,6 +101,10 @@ class Window(LibraryPage, ReaderPage, TasksPage, SummaryPage, CitationsPage, Set
 
 
 def main():
+    # 安装的 GUI 入口也要先分流冻结子进程，避免重复启动桌面。
+    # Installed GUI entrypoints must dispatch frozen workers before creating the desktop.
+    from multiprocessing import freeze_support
+    freeze_support()
     from .service import LocalService
     app=QApplication(sys.argv);app.setStyleSheet(STYLE)
     if '--smoke-test' in sys.argv:

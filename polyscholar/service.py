@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from .store import LocalStore
 from .metadata import exchange_metadata
+from .citation_import import CitationImporter
 from .summary_model import selected_blocks, request_summary
 from integrations.engines import VERSIONS, limited_environment
 
@@ -64,6 +65,7 @@ class LocalService:
         self._threads = {}
         self._closed = False
         self._subscribers = []
+        self._citation_importer = CitationImporter()
 
     def subscribe_jobs(self, callback):
         with self._lock:
@@ -113,6 +115,19 @@ class LocalService:
 
     def list_documents(self):
         return self.store.list_root_documents()
+
+    def preview_metadata_import(self, path, format):
+        return self._citation_importer.preview(path, format)
+
+    def import_metadata_preview(self, preview, selected_indices, collection_id=None):
+        metadata_items = self._citation_importer.selected(preview, selected_indices)
+        with self._lock:
+            if self._closed:
+                raise ValueError('应用正在关闭，未导入任何条目。')
+            self._citation_importer.ensure_preview(preview)
+            result = self.store.import_bibliographic_items(metadata_items, collection_id)
+            self._citation_importer.consumed(preview)
+            return result
 
     def create_bibliographic_item(self, metadata, collection_id=None):
         with self._lock:
@@ -615,6 +630,7 @@ class LocalService:
         return exchange_metadata(document, format)
 
     def close(self):
+        self._citation_importer.close()
         with self._lock:
             self._closed = True
             self._key = ''

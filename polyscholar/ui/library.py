@@ -8,6 +8,7 @@ from .fulltext import FullTextDialog
 from .trash import TrashDialog, TrashMoveOperation
 from .duplicates import DuplicatesDialog
 from .bibliographic import BibliographicDialog
+from .citation_import import CitationImportDialog
 from copy import deepcopy
 from ..metadata import APPLICABLE, legacy_creators, creator_display
 
@@ -30,7 +31,17 @@ class LibraryPage:
         controls=QHBoxLayout();self.collection_edit_button=self.button('编辑',self.edit_collection);self.collection_delete_button=self.button('删除',self.remove_collection);controls.addWidget(self.collection_edit_button);controls.addWidget(self.collection_delete_button);ol.addLayout(controls)
         self.include_children=QCheckBox('包含子集合');self.include_children.toggled.connect(self.filter_docs);ol.addWidget(self.include_children)
         ol.addWidget(QLabel('标签（可多选）'));self.tag_filter=QListWidget();self.tag_filter.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection);self.tag_filter.setMaximumHeight(160);self.tag_filter.itemSelectionChanged.connect(self.filter_docs);ol.addWidget(self.tag_filter)
-        tag_actions=QHBoxLayout();tag_actions.addWidget(self.button('重命名',self.rename_selected_tag));tag_actions.addWidget(self.button('删除标签',self.remove_selected_tag));ol.addLayout(tag_actions);ol.addWidget(self.button('清除筛选',self.clear_filters));self.trash_button=self.button('回收站',self.open_trash);ol.addWidget(self.trash_button);self.duplicates_button=self.button('重复候选 / 合并',self.open_duplicates);ol.addWidget(self.duplicates_button)
+        tag_actions = QHBoxLayout()
+        tag_actions.addWidget(self.button('重命名',self.rename_selected_tag))
+        tag_actions.addWidget(self.button('删除标签',self.remove_selected_tag))
+        ol.addLayout(tag_actions)
+        ol.addWidget(self.button('清除筛选',self.clear_filters))
+        self.trash_button = self.button('回收站',self.open_trash)
+        ol.addWidget(self.trash_button)
+        self.duplicates_button = self.button('重复候选 / 合并',self.open_duplicates)
+        ol.addWidget(self.duplicates_button)
+        self.citation_import_button = self.button('导入引文',self.open_citation_import)
+        ol.addWidget(self.citation_import_button)
         split.addWidget(organize)
         self.document_list=QListWidget();self.document_list.setMinimumWidth(160);self.document_list.currentRowChanged.connect(self.select_doc);split.addWidget(self.document_list)
         inspector=QWidget();inspector.setMinimumWidth(280);f=QFormLayout(inspector);self.metadata_form=f;self.fields={};self._metadata_creators=[];self._authors_loaded=''
@@ -299,6 +310,12 @@ class LibraryPage:
         if dialog.exec()==QDialog.DialogCode.Accepted:
             self._metadata_creators=dialog.creators();self._authors_loaded='; '.join(creator_display(c) for c in self._metadata_creators if c['role']=='author');self.fields['authors'].setText(self._authors_loaded);self.update_creator_info()
 
+    def open_citation_import(self):
+        if self.io_worker is not None or self._closing:
+            return
+        self.citation_import_dialog = CitationImportDialog(self,self.current_collection())
+        self.citation_import_dialog.show()
+
     def new_bibliographic(self):
         if self.io_worker is not None or self._closing:return
         self.bibliographic_dialog=BibliographicDialog(self,self.current_collection())
@@ -392,6 +409,7 @@ class LibraryPage:
         self.attachment_delete_button.setEnabled(bool(row and row['role']!='original') and not busy)
         self.primary_pdf_button.setEnabled(bool(row and not row.get('isPrimary')) and not busy)
         self.new_bibliographic_button.setEnabled(not busy)
+        self.citation_import_button.setEnabled(not busy)
         self.update_read_controls()
 
     def add_attachment(self):

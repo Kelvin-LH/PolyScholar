@@ -23,7 +23,7 @@ from .trash import TrashLibrary, TRASH_SCHEMA
 from .duplicates import DuplicateLibrary, MERGE_SCHEMA
 from .bibliographic import BibliographicPolicy
 
-AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt','document_trashed','document_restored','purge_cleanup','documents_merged','bibliographic_created','primary_pdf_changed'})
+AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt','document_trashed','document_restored','purge_cleanup','documents_merged','bibliographic_created','primary_pdf_changed','citation_imported'})
 
 MAX_PDF = 100 * 1024 * 1024
 SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeldoc',
@@ -337,22 +337,46 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
                     target.unlink(missing_ok=True)
                 raise
 
-    def create_bibliographic_item(self, metadata, collection_id=None):
+    @staticmethod
+    def _new_bibliographic_document(metadata):
         document = dict(
             id=str(uuid.uuid4()), title='', authors='', doi='', year='', tags=[], notes='',
             sha256=None, filename=None, sizeBytes=None, fileKind='bibliographic',
             primaryPdfId=None, sourcePaths=[], createdAt=timestamp(),
         )
-        document = BibliographicPolicy.metadata_change(document, metadata)
+        return BibliographicPolicy.metadata_change(document, metadata)
+
+    def _insert_bibliographic_documents(self, db, documents, collection_id):
+        if collection_id is not None:
+            self._require_collection(db, collection_id)
+        for document in documents:
+            db.execute('INSERT INTO desktop_documents(id,sha256,data) VALUES(?,NULL,?)',
+                       (document['id'], json.dumps(document, ensure_ascii=False)))
+            if collection_id is not None:
+                db.execute('INSERT INTO desktop_memberships VALUES(?,?)', (document['id'], collection_id))
+
+    def create_bibliographic_item(self, metadata, collection_id=None):
+        document = self._new_bibliographic_document(metadata)
         with self.lock, self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
-            if collection_id is not None:
-                self._require_collection(db,collection_id)
-            db.execute('INSERT INTO desktop_documents(id,sha256,data) VALUES(?,NULL,?)',(document['id'],json.dumps(document,ensure_ascii=False)))
-            if collection_id is not None:
-                db.execute('INSERT INTO desktop_memberships VALUES(?,?)',(document['id'],collection_id))
-            db.execute('INSERT INTO desktop_audit(point,outcome,created_at) VALUES(?,?,?)',('bibliographic_created','succeeded',timestamp()))
+            self._insert_bibliographic_documents(db, [document], collection_id)
+            db.execute('INSERT INTO desktop_audit(point,outcome,created_at) VALUES(?,?,?)',
+                       ('bibliographic_created', 'succeeded', timestamp()))
         return self.document(document['id'])
+
+    def import_bibliographic_items(self, metadata_items, collection_id=None):
+        if not isinstance(metadata_items, list) or not 1 <= len(metadata_items) <= 1000:
+            raise ValueError('批量导入需要 1–1000 条有效书目。')
+        documents = [self._new_bibliographic_document(metadata) for metadata in metadata_items]
+        with self.lock, self.connection() as db:
+            # One transaction includes every item, membership and the fixed audit event.
+            # 所有条目、集合关系和固定审计在同一事务中提交，不留下半批记录。
+            db.execute('BEGIN IMMEDIATE')
+            self._insert_bibliographic_documents(db, documents, collection_id)
+            db.execute('INSERT INTO desktop_audit(point,outcome,created_at) VALUES(?,?,?)',
+                       ('citation_imported', 'succeeded', timestamp()))
+        return dict(documentIds=[document['id'] for document in documents],
+                    importedCount=len(documents), collectionId=collection_id)
 
     def update_document(self, document_id, patch):
         with self.lock, self.connection() as db:

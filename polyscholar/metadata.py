@@ -145,6 +145,9 @@ def exchange_metadata(document, format):
         values += [(target, _bib(fields[source])) for source, target in mapping.items() if source in fields]
         if kind == 'thesis':
             values.append(('type', _bib(fields.get('thesisType') or 'Thesis')))
+            # 通用 @misc 不推断学位；显式标记保证本软件回读时保留论文类型。
+            # Generic @misc must not imply a degree; an explicit marker preserves thesis round trips.
+            values.append(('polyscholaritemtype', 'thesis'))
         if year:
             values.append(('year', year))
         if doc.get('doi'):

@@ -143,3 +143,13 @@ SQLite v10 升级前备份 library-before-v10.sqlite3。关系迁移、主书目
 合并无文件来源保留 `merged_record` 关系，移走其真实子附件，不伪装成文件。空书目主项可继承来源已选择的活动 PDF；已有隐藏选择保持。预览返回计划 primaryPdfId，实际提交仍核对 revision；counts.records 是记录数，pdfs/attachments 只计真实文件。历史读取先检查家族快照总字节不超过32 MiB。
 
 v11 升级前备份 library-before-v11.sqlite3；原子重建可空 SHA 表与扩展关系角色，保留旧 ID、哈希、索引、触发器、IR、成员与任务。重建期间暂关外键避免旧关系级联删除，提交前 foreign_key_check，所有常规连接开启外键。模式错误或关系损坏保持旧版本与数据，拒绝启动，不绕过校验。
+
+## 本地引文导入
+
+`preview_metadata_import(path,format)` 显式接受 bibtex/ris/csl-json，读取最多8 MiB UTF-8文件（可有BOM），完整解析最多1000记录，超限拒绝且不截断。BibTeX使用固定bibtexparser，RIS使用固定rispy，CSL采用严格JSON；不存在的文件、格式错误、重复JSON/BibTeX字段、非有限数字和未结束RIS记录均不静默忽略。
+
+返回 token/format/sourceName/fingerprint/total/validCount/invalidCount/warnings/items。每项 index/sourceId/title/valid/metadata/warnings/errors；元数据复用既有四类型、日期、作者和字段校验。未知类型不可选；未导入来源字段、完整姓名的个人/机构歧义及未解释LaTeX命令明确警告，无法映射日期或冲突别名无效。URL、附件字段不访问，来源ID不用作本地ID。作者顺序保留，不猜拆名字；当前BibTeX学位论文导出用@misc及显式polyscholaritemtype标记，不推断博士。其他软件可忽略该自定义标记，不能宣称所有字段无损往返。
+
+解析与完整IPC接收在独立spawn进程中受30秒预算监督，结果最多32 MiB；禁宏展开/交叉引用补填，不运行TeX。解析器原始诊断丢弃，不显示或写入原始来源日志。主桌面只保持最多8份、合计32 MiB可信预览，超量淘汰旧项；关闭清空并终止回收解析进程。冻结入口使用freeze_support，不在解析子进程创建Qt窗口或用户库；真实冻结包验收仍单列待执行。
+
+`import_metadata_preview(preview,selected_indices,collection_id=None)` 只接受非空、唯一、真正整数的有效索引；拒绝篡改、失效或已消费token。源文件重新读取、哈希及解析结果核对后再提交，漂移必须重新预览。所选记录用新UUID在单事务内创建无文件书目、目标集合关系及固定citation_imported事件；失败无半批记录且token可重试，成功消费token。返回 documentIds/importedCount/collectionId；不自动去重合并，不改已有记录，不引入文件对象或下载任务。UI共享ManagedIODialog，显式勾选、不默认全选；失败保留草稿但解析失败或来源变化禁止沿用旧预览提交。

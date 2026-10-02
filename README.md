@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/Kelvin-LH/PolyScholar?style=flat)](https://github.com/Kelvin-LH/PolyScholar/stargazers)
 
-[界面预览](#界面预览) · [快速开始](#快速开始) · [开发路线](#开发路线) · [文档](#文档) · [参与贡献](#参与贡献)
+[界面预览](#界面预览) · [快速开始](#快速开始) · [参与贡献](#参与贡献) · [许可](#致谢与许可)
 
 </div>
 
@@ -26,7 +26,7 @@
 - **双语阅读**：原文与译文并排显示，在桌面内完成阅读。
 - **证据摘要**：勾选原文生成结构化模型摘要，保留引用与手写笔记，可跳转原文并提示旧引用失效。
 - **自选模型**：支持 DeepSeek 等兼容 API，自动获取可用模型，也可手动填写。
-- **文件导出**：导出译文 PDF，以及 BibTeX、RIS、CSL-JSON 文献元数据。
+- **引文交换**：预览并导入 BibTeX、RIS、CSL-JSON，导出选中书目及译文 PDF。
 - **个人桌面**：Python + PySide6 + SQLite，无需服务器或账户。发行包自带 Python，缓存目录可调整。
 
 文献与笔记保存在本机。联网用于模型 API、DOI 元数据查询及模型/字体下载；翻译时会向模型 API 发送论文内容。[数据边界 →](docs/09-local-and-network-scope.md)
@@ -72,6 +72,8 @@ Python / PySide6 原型，使用合成测试 PDF。
 ![原生书目信息](design/screenshots/metadata-python.png)
 
 ![先建书目，稍后添加 PDF](design/screenshots/bibliographic-create-python.png)
+
+![本地引文导入与预览](design/screenshots/citation-import-python.png)
 
 ![作者与编者](design/screenshots/creators-python.png)
 

@@ -27,7 +27,14 @@ def main():
     work = ROOT/'.tools/python-build'
     work.mkdir(parents=True, exist_ok=True)
     entrypoint = work/'desktop_entry.py'
-    entrypoint.write_text('from polyscholar.app import main\nraise SystemExit(main())\n', encoding='utf-8')
+    # 子进程只执行解析 target，不能再次创建 Qt 窗口或打开用户库。
+    # Spawn children run only their parser target, never another Qt window or library.
+    entrypoint.write_text(
+        "from multiprocessing import freeze_support\n"
+        "if __name__ == '__main__':\n"
+        "    freeze_support()\n"
+        "    from polyscholar.app import main\n"
+        "    raise SystemExit(main())\n", encoding='utf-8')
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir',
                '--windowed', '--name', 'PolyScholar', '--paths', str(ROOT),
                '--distpath', str(dist), '--workpath', str(work/'work'), '--specpath', str(work),
