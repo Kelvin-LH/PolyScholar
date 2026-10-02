@@ -46,6 +46,8 @@ def main():
         target = resources/directory
         if target.exists(): shutil.rmtree(target)
         shutil.copytree(ROOT/directory, target, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    # The isolated summary worker loads this controlled helper beside its script.
+    shutil.copy2(ROOT/'polyscholar/summary_model.py', resources/'integrations/summary_model.py')
     for filename in ('LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md'):
         shutil.copy2(ROOT/filename, resources/filename)
     # Execute the packaged engine trees from their actual final bundle prefix.

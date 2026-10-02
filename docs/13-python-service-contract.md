@@ -54,3 +54,14 @@
 `current_document_ir(id)`、`document_blocks(id, revision_id=None)` 返回实际版本、页码、文本及可见页面坐标。`save_claim(id, text, evidence)` 校验逐字摘录和文献/版本关系；`list_claims(id)` 返回关联/无证据及 stale 状态。重新解析不复用旧块 ID，也不将旧摘录自动绑定新版本。v4 升级前保存 `library-before-v4.sqlite3`。
 
 本地人工笔记不等于模型摘要，不判定科学结论真伪。解析版本/页面/块/结论/证据采用关系表与组合外键，文献基础元数据仍部分使用 JSON。
+
+
+## 选段模型摘要（v5）
+
+`summarize_document(id, block_ids, revision_id=None, expected_settings=None)` 将显式选择的当前文本块发送至配置的 OpenAI-compatible `/chat/completions`，使用会话密钥及 JSON 模式；不上传 PDF、图片、标题或未选正文。界面展示实际端点、模型、目标语言和完整选段；配置变化时拒绝沿用旧展示范围发起请求。
+
+单次最多 64 块、128 KiB 原文，输出预算 4096 tokens，响应最多 1 MiB。失败不自动重试或改换提供商。设置超时最多取 120 秒；受监督的 Python 网络工作进程覆盖连接、响应头和正文的总时限，到期终止并回收。密钥通过 stdin 传递，关闭服务会终止在途工作进程。冻结包使用内置 BabelDOC Python，资源含独立 worker 与相邻受控辅助模块。禁止重定向，错误不包含原始响应。
+
+每项包含 `text,category,attribution,evidence`。类别为 question/method/data/result/limitation/reproducibility/other，归属为 author_report/model_inference。引用必须是本次输入块内的逐字摘录；页码由本地数据生成。无引用的条目标记缺少证据。输入版本改变、伪造来源或任一条目无效时整批不保存。
+
+SQLite v5 在升级前备份 `library-before-v5.sqlite3`，保存批次模型、实际有效 token 用量、输入块 ID、生成时间以及类别/归属。手写笔记与模型摘要分开标记，重解析后旧结果保留并提示引用失效。模型归属标签本身仍需人工核对。

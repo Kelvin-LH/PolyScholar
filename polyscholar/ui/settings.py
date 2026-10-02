@@ -27,7 +27,7 @@ class SettingsPage:
         def save():
             self.service.save_settings(s)
             if self.key.text():self.service.set_session_key(self.key.text());self.key.clear()
-            status=self.service.discover_engine(s['engine']);self.runtime.setText(status['message']);self.refresh_boundary()
+            status=self.service.discover_engine(s['engine']);self.runtime.setText(status['message']);self.refresh_boundary();self.update_summary_range()
         self.guard(save)
 
     def fetch_models(self):

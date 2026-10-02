@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QPdfWriter,QPainter
 from polyscholar.app import Window,STYLE
@@ -33,6 +34,7 @@ def main():
             block=service.document_blocks(doc['id'])[0]
             service.save_claim(doc['id'],'合成 PDF 的本地证据笔记。',[{'blockId':block['id'],'quote':block['text']}])
             window.nav.setCurrentRow(3);window.evidence_doc.setCurrentIndex(window.evidence_doc.findData(doc['id']));window.load_evidence()
+            window.evidence_blocks.item(0).setCheckState(Qt.CheckState.Checked)
             window.evidence_claims.setCurrentRow(0);app.processEvents();window.grab().save(str(args.output/'evidence-python.png'))
             window.resize(1024,700);window.nav.setCurrentRow(0);app.processEvents();window.grab().save(str(args.output/'library-1024.png'))
         finally:

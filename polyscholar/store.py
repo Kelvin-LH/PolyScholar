@@ -49,7 +49,7 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary):
         self.objects.mkdir(exist_ok=True)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version > 4:
+            if version > 5:
                 raise ValueError('本地数据库来自更新版本，请升级应用。')
             if version == 1:
                 backup = self.root / 'library-before-v2.sqlite3'
@@ -81,6 +81,16 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary):
                         target.close()
                     if os.name == 'posix':
                         backup.chmod(0o600)
+            if version in (1, 2, 3, 4):
+                backup = self.root / 'library-before-v5.sqlite3'
+                if not backup.exists():
+                    target = sqlite3.connect(backup)
+                    try:
+                        db.backup(target)
+                    finally:
+                        target.close()
+                    if os.name == 'posix':
+                        backup.chmod(0o600)
             db.executescript('''
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS desktop_documents(id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, data TEXT NOT NULL);
@@ -95,7 +105,7 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary):
                     PRIMARY KEY(document_id,collection_id));
                 CREATE INDEX IF NOT EXISTS desktop_memberships_collection ON desktop_memberships(collection_id);
             ''')
-            db.executescript('BEGIN IMMEDIATE;\n' + IR_SCHEMA + '\nPRAGMA user_version=4;\nCOMMIT;')
+            db.executescript('BEGIN IMMEDIATE;\n' + IR_SCHEMA + '\nPRAGMA user_version=5;\nCOMMIT;')
         values = ','.join("'"+point+"'" for point in sorted(AUDIT_POINTS))
         with self.connection() as db:
             db.execute('BEGIN IMMEDIATE')

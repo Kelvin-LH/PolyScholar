@@ -45,7 +45,7 @@ class Window(LibraryPage, ReaderPage, TasksPage, SummaryPage, CitationsPage, Set
         root=QWidget(); row=QHBoxLayout(root); row.setContentsMargins(0,0,0,0); row.setSpacing(0)
         side=QWidget(); side.setObjectName('sidebar'); side.setFixedWidth(240); sl=QVBoxLayout(side);sl.setContentsMargins(20,30,20,25)
         brand=QLabel('PolyScholar 研译');brand.setObjectName('brand');sl.addWidget(brand);sl.addSpacing(24)
-        self.nav=QListWidget();self.nav.addItems(['文献库','双语阅读','翻译任务','证据笔记','引用导出','设置']);sl.addWidget(self.nav)
+        self.nav=QListWidget();self.nav.addItems(['文献库','双语阅读','翻译任务','证据摘要','引用导出','设置']);sl.addWidget(self.nav)
         self.stack=QStackedWidget(); row.addWidget(side); row.addWidget(self.stack,1);self.setCentralWidget(root)
         self.library();self.reader();self.tasks();self.summary();self.citations();self.settings()
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex);self.nav.setCurrentRow(0)

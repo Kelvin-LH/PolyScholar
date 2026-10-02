@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Exercise the native local evidence flow with actual PDFs, without model calls."""
+"""Exercise the native local evidence flow with actual PDFs, with a mock model response; no remote model calls."""
 from pathlib import Path
 import sys
 import tempfile
@@ -53,6 +53,46 @@ def main():
             service.save_claim(source['id'],'A note without evidence.',[])
             window.refresh_evidence_claims(source['id'])
             assert any('缺少原文证据' in window.evidence_claims.item(index).text() for index in range(window.evidence_claims.count()))
+            # Only checked blocks enter the API flow; the unselected page stays out.
+            settings=service.get_settings();settings.update(endpoint='https://example.invalid/v1',model='mock-academic',targetLanguage='zh')
+            service.save_settings(settings);service.set_session_key('synthetic-ui-test-key')
+            window.update_summary_range()
+            assert not window.generate_summary_button.isEnabled()
+            selected=window.evidence_blocks.item(0).data(Qt.ItemDataRole.UserRole)
+            window.evidence_blocks.item(0).setCheckState(Qt.CheckState.Checked)
+            assert window.generate_summary_button.isEnabled()
+            assert 'First page local evidence.' in window.summary_range.toPlainText()
+            assert 'Rotated cropped page evidence.' not in window.summary_range.toPlainText()
+            assert 'mock-academic' in window.summary_api.text() and 'example.invalid' in window.summary_api.text()
+            model_claim={'text':'A mocked model summary; scientific validity is not checked.',
+                         'category':'result','attribution':'author_report',
+                         'evidence':[{'blockId':selected['id'],'quote':'First page local evidence.'}]}
+            with patch('polyscholar.service.request_summary',return_value=([model_claim],{'total_tokens':8})) as request:
+                window.generate_evidence_summary()
+                assert not window.generate_summary_button.isEnabled() and not window.evidence_blocks.isEnabled()
+                window.generate_evidence_summary()
+                wait_until(lambda:window.io_worker is None)
+                assert request.call_count==1
+                sent_blocks=request.call_args.args[4]
+                assert [block['id'] for block in sent_blocks]==[selected['id']]
+                assert 'Rotated cropped page evidence.' not in str(sent_blocks)
+            model_notes=[claim for claim in service.list_claims(source['id']) if claim.get('provenance',{}).get('source')=='model']
+            assert len(model_notes)==1 and model_notes[0]['evidence'][0]['blockId']==selected['id']
+            assert any('模型摘要' in window.evidence_claims.item(index).text() and '结果 · 作者报告' in window.evidence_claims.item(index).text() for index in range(window.evidence_claims.count()))
+            assert '模型摘要' in window.evidence_status.text()
+            # A saved note with two quotes permits choosing either source location.
+            second=window.evidence_blocks.item(1).data(Qt.ItemDataRole.UserRole)
+            service.save_claim(source['id'],'A note retaining two source locations.',[
+                {'blockId':selected['id'],'quote':'First page local evidence.'},
+                {'blockId':second['id'],'quote':'Rotated cropped page evidence.'}])
+            window.refresh_evidence_claims(source['id'])
+            multiple=next(index for index in range(window.evidence_claims.count())
+                          if 'two source locations' in window.evidence_claims.item(index).text())
+            window.evidence_claims.setCurrentRow(multiple)
+            assert window.saved_evidence.count()==2
+            window.saved_evidence.setCurrentIndex(next(index for index in range(window.saved_evidence.count()) if window.saved_evidence.itemData(index)['pageNumber']==2));window.locate_saved_claim()
+            wait_until(lambda:window.io_worker is None and window.pdf_docs[0].pageCount()==2)
+            wait_until(lambda:window.pdf_views[0].pageNavigator().currentPage()==1)
             window.evidence_blocks.setCurrentRow(1)
             block=window.evidence_blocks.currentItem().data(Qt.ItemDataRole.UserRole)
             window.locate_evidence();wait_until(lambda:window.io_worker is None and window.pdf_docs[0].pageCount()==2)
@@ -81,7 +121,7 @@ def main():
                 wait_until(lambda:window._closed)
         finally:
             window.close();service.close()
-    print('Native evidence: actual PDF parse, quote notes, rotated/cropped navigation, stale references, no-text state and safe busy close passed')
+    print('Native evidence: actual PDF parse, quote notes, selected-source mock summaries, rotated/cropped navigation, stale references, no-text state and safe busy close passed')
 
 
 if __name__=='__main__':main()

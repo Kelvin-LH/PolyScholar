@@ -14,6 +14,7 @@ import uuid
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from .store import LocalStore
+from .summary_model import selected_blocks, request_summary
 from integrations.engines import VERSIONS, limited_environment
 
 MAX_EVENT = 1024 * 1024
@@ -173,6 +174,47 @@ class LocalService:
 
     def list_claims(self, document_id):
         return self.store.list_claims(document_id)
+
+    def summarize_document(self, document_id, block_ids, revision_id=None, expected_settings=None):
+        """Send only explicitly selected current blocks; atomically save checked claims."""
+        with self._lock:
+            if self._closed:
+                raise ValueError('应用正在关闭。')
+            token = self._key
+            settings = self.store.get_settings()
+        if expected_settings is not None and expected_settings != {k: settings[k] for k in ('endpoint', 'model', 'targetLanguage')}:
+            raise ValueError('模型配置已变更，请确认发送范围后重新生成。')
+        if not token:
+            raise ValueError('请先设置会话 API 密钥。')
+        address = endpoint_url(settings['endpoint'])
+        current = self.store.current_document_ir(document_id)
+        if not current or current['status'] != 'ready':
+            raise ValueError('请先提取本地文献文本。')
+        if revision_id is not None and revision_id != current['id']:
+            raise ValueError('所选解析版本已失效，请刷新后重新选择。')
+        revision_id = current['id']
+        blocks = selected_blocks(self.store.document_blocks(document_id, revision_id), block_ids)
+        if getattr(sys, 'frozen', False):
+            python = self.resources / 'runtime/babeldoc' / ('python.exe' if os.name == 'nt' else 'bin/python3')
+        else:
+            python = Path(sys.executable)
+        identifier = 'summary-' + str(uuid.uuid4())
+        def started(child):
+            with self._lock:
+                if self._closed:
+                    raise ValueError('应用正在关闭。')
+                self._children[identifier] = child
+        def finished(child):
+            with self._lock:
+                self._children.pop(identifier, None)
+        claims, usage = request_summary(address, token, settings['model'], settings['targetLanguage'], blocks,
+            min(settings['timeoutSeconds'], 120), python_path=python,
+            worker_path=self.resources / 'integrations/summary_worker.py', on_spawn=started, on_done=finished)
+        with self._lock:
+            if self._closed:
+                raise ValueError('应用正在关闭，摘要结果未保存。')
+            return self.store.save_model_summary(document_id, revision_id, claims, settings['model'], usage,
+                                                 input_block_ids=[b['id'] for b in blocks])
 
     def list_collections(self):
         return self.store.list_collections()
