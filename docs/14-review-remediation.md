@@ -20,7 +20,17 @@
 
 源码 `b3cf329` 的 [CI 37003196865](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37003196865) 已确认六项全部成功，Windows/macOS/Linux core与native-gui实际完成，包含新引文流程及spawn解析。该证据不替代真实冻结安装包或Zotero应用生成资料库的迁移验收。
 
-## 修正后 CI：Windows 后续导入收尾尚未通过
+## 最新阶段收尾：六项 CI 成功与回调归属修复
+
+源码 `ad43909` 的 [CI 37015097200](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37015097200) 已核对终态及各 job conclusion：Windows/macOS/Linux 的 core 与 native-gui 六项全部成功，Windows 迁移预览及选中导入步骤成功。本次成功未证明此前偶发超时的原因，也不是安装包或真实引擎/API验收。
+
+独立复核另复现共享 IO 对话框的完成回调未绑定任务：主窗口先释放旧任务，poll 启动待执行的新任务，随后排队的旧 finished 清掉新任务 busy/watched 状态，使取消控件禁用。协调者用 HEAD 原实现运行新增回归，实际触发 `A late old completion cleared the active operation` 断言。现 finished 捕获原 worker，完成处理拒绝非当前 worker，关闭后忽略迟到回调及 poll；所有相关对话框复用同一处理。
+
+`scripts/smoke_managed_io.py` 使用真实 Qt 排队信号与显式安排的 QObject 交错夹具，验证新任务状态保持、后续正常结束、每代完成一次、关闭后无控件更新和待执行动作。它不模拟真实工作线程调度，也不归因为 Windows 超时。修后该回归、原生桌面、三格式引文导入及 Zotero 迁移本机检查全部通过，基线与 diff 检查通过；新增回归已接入三平台 native-gui，修复版本 CI 尚待执行结果。
+
+当前收尾交付为上述源码与回归，不继续追加导入导出格式。V1–V5、Windows ACL、凭据崩溃清理、三平台安装及实际 Zotero 内容迁移验收保持开放；CSV/EndNote/完整备份恢复和其余 Zotero 对标项不记为已完成。后续分别按产品功能与发行验收记录证据，源代码检查成功不关闭真实验收门槛。
+
+## 前一轮 CI：Windows 后续导入收尾失败
 
 源码 `973b9af` 的 [CI 37013562227](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37013562227) 已实际完成：五项成功，Windows native失败。三平台core均执行209项并成功（macOS97.814秒、Linux43.687秒、Windows96.563秒且7项按平台跳过）；启动/挂起/取消/关闭及迁移崩溃恢复相关行已核对成功。macOS与Linux的完整原生流程成功。
 

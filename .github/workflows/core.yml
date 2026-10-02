@@ -44,6 +44,10 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/smoke_desktop.py
+      - name: Check queued dialog completion ownership
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_managed_io.py
       - name: Check actual local PDF extraction and native evidence workflow
         env:
           QT_QPA_PLATFORM: offscreen

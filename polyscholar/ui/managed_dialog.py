@@ -43,7 +43,12 @@ class ManagedIODialog(QDialog):
         self._watched_worker = worker
         if worker:
             worker.failed.connect(self.failed, Qt.ConnectionType.QueuedConnection)
-            worker.finished.connect(self._complete_io, Qt.ConnectionType.QueuedConnection)
+            # Late completion belongs to its original worker, never the next operation.
+            # 晚到的完成事件只属于原 worker，不能清空下一次操作状态。
+            worker.finished.connect(
+                lambda worker=worker: self._complete_io(worker),
+                Qt.ConnectionType.QueuedConnection,
+            )
         else:
             self._busy = False
             self.update_controls()
@@ -56,8 +61,8 @@ class ManagedIODialog(QDialog):
         self._pending_action = action
         self._poll_shared_io()
 
-    def _complete_io(self):
-        if not self._busy:
+    def _complete_io(self, worker):
+        if self._closed or not self._busy or worker is not self._watched_worker:
             return
         self._busy = False
         self._watched_worker = None
@@ -69,8 +74,10 @@ class ManagedIODialog(QDialog):
     def _poll_shared_io(self):
         # 极快线程可能在附加 finished 槽前结束；主窗口指针是实际生命周期依据。
         # A fast thread may finish before our extra slot connects; use the window's owner state.
+        if self._closed:
+            return
         if self._busy and self.window.io_worker is not self._watched_worker:
-            self._complete_io()
+            self._complete_io(self._watched_worker)
         self.update_controls()
         self._run_pending()
 
