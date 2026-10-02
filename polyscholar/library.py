@@ -23,6 +23,7 @@ class CollectionLibrary:
             return [dict(id=row[0], name=row[1], parentId=row[2], count=row[3]) for row in db.execute('''
                 SELECT c.id,c.name,c.parent_id,COUNT(m.document_id) FROM desktop_collections c
                 LEFT JOIN desktop_memberships m ON m.collection_id=c.id
+                  AND NOT EXISTS(SELECT 1 FROM desktop_attachment_links a WHERE a.child_document_id=m.document_id)
                 GROUP BY c.id ORDER BY c.name COLLATE NOCASE,c.id
             ''')]
 
@@ -86,6 +87,7 @@ class CollectionLibrary:
         with self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
             self._require_collection(db, collection_id)
+            self._require_root(db, document_id)
             if not db.execute('SELECT 1 FROM desktop_documents WHERE id=?', (document_id,)).fetchone():
                 raise ValueError('文献不存在。')
             if present:
@@ -95,7 +97,7 @@ class CollectionLibrary:
         self.audit('collection_membership_updated')
 
     def list_tags(self):
-        return sorted({tag for document in self.list_documents() for tag in document.get('tags', [])}, key=str.casefold)
+        return sorted({tag for document in self.list_root_documents() for tag in document.get('tags', [])}, key=str.casefold)
 
     def rename_tag(self, old, new=None):
         old = clean_name(old, '标签')
@@ -137,6 +139,8 @@ class CollectionLibrary:
             else:
                 rows = db.execute('SELECT data FROM desktop_documents ORDER BY rowid DESC')
             documents = [json.loads(row[0]) for row in rows]
+            children = {row[0] for row in db.execute('SELECT child_document_id FROM desktop_attachment_links')}
+            documents = [document for document in documents if document['id'] not in children]
         needle = text.strip().casefold()
         return [document for document in documents if required.issubset(set(document.get('tags', []))) and
                 (not needle or needle in ' '.join(str(document.get(key, '')) for key in

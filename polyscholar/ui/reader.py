@@ -8,7 +8,7 @@ class ReaderPage:
     def reader(self):
         l=self.page('双语阅读','原文与翻译结果并排阅读；段落对齐和图中文字注释仍在研发。')
         self.pdf_title=QLabel('请在文献库中选择文献并点击“阅读文献”。');l.addWidget(self.pdf_title)
-        self._reader_evidence=None;self.reader_document=None;self.reader_result=QComboBox();self.reader_result.addItem('仅阅读原文',None);self.reader_result.currentIndexChanged.connect(self.load_reader);l.addWidget(self.reader_result)
+        self._reader_evidence=None;self.reader_document=None;self.reader_source=QComboBox();self.reader_source.currentIndexChanged.connect(self.select_reader_source);l.addWidget(self.reader_source);self.reader_result=QComboBox();self.reader_result.addItem('仅阅读原文',None);self.reader_result.currentIndexChanged.connect(self.load_reader);l.addWidget(self.reader_result)
         split=QSplitter();self.pdf_docs=[];self.pdf_views=[]
         for _ in range(2):
             pdf=QPdfDocument(self);view=QPdfView();view.setDocument(pdf);view.setPageMode(QPdfView.PageMode.MultiPage);view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
@@ -19,6 +19,7 @@ class ReaderPage:
 
     def refresh_reader_choices(self):
         if not hasattr(self,'reader_result'):return
+        self.refresh_reader_sources()
         previous=self.reader_result.currentData();self.reader_result.blockSignals(True);self.reader_result.clear()
         self.reader_result.addItem('仅阅读原文',None)
         if self.reader_document:
@@ -30,13 +31,43 @@ class ReaderPage:
         if selected>=0:self.reader_result.setCurrentIndex(selected)
         self.reader_result.blockSignals(False)
 
-    def open_original(self):
-        if self.io_worker is not None:return
-        document=self.selected()
-        if not document:return
-        if not self.reader_document or self.reader_document['id']!=document['id']:
-            self.reader_document=document;self.refresh_reader_choices()
+    def clear_reader(self):
+        self.reader_document=None;self._reader_evidence=None
+        for pdf in self.pdf_docs:pdf.close()
+        for buffer in getattr(self,'buffers',[]):buffer.deleteLater()
+        self.buffers=[];self.reader_source.clear();self.refresh_reader_choices()
+        self.pdf_title.setText('请在文献库中选择文献并点击“阅读文献”。')
+
+    def refresh_reader_sources(self):
+        self.reader_source.blockSignals(True);self.reader_source.clear()
+        if self.reader_document:
+            identifier=self.reader_document['id']
+            # A child PDF has its own content identity but belongs to one root library entry.
+            parent=self.reader_document.get('parentDocumentId') or identifier
+            if parent not in {document['id'] for document in self.docs}:
+                self.reader_source.blockSignals(False);self.clear_reader();return
+            rows=self.service.list_attachments(parent)
+            if identifier not in {row['documentId'] for row in rows}:
+                self.reader_source.blockSignals(False);self.clear_reader();return
+            for row in rows:self.reader_source.addItem(self.attachment_label(row),row['documentId'])
+            index=self.reader_source.findData(identifier)
+            if index>=0:self.reader_source.setCurrentIndex(index)
+        self.reader_source.blockSignals(False)
+
+    def select_reader_source(self,*args):
+        identifier=self.reader_source.currentData()
+        if identifier and self.io_worker is None and not self._closing:self.open_document(identifier)
+
+    def open_document(self,identifier):
+        if self.io_worker is not None or self._closing:return
+        self.reader_document=self.service.store.document(identifier)
+        self.refresh_reader_choices()
+        self.reader_result.blockSignals(True);self.reader_result.setCurrentIndex(0);self.reader_result.blockSignals(False)
         self.load_reader()
+
+    def open_original(self):
+        document=self.selected()
+        if document:self.open_document(document['id'])
 
     def open_evidence(self,block):
         if self.io_worker is not None or self._closing:return

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, QListWidget, QLineEdit, QFileDialog, QMessageBox, QFormLayout, QTextEdit, QSplitter, QInputDialog, QTreeWidget, QTreeWidgetItem, QCheckBox, QAbstractItemView, QDialog, QDialogButtonBox, QComboBox)
+from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, QListWidget, QLineEdit, QFileDialog, QMessageBox, QFormLayout, QTextEdit, QSplitter, QInputDialog, QTreeWidget, QTreeWidgetItem, QCheckBox, QAbstractItemView, QDialog, QDialogButtonBox, QComboBox, QScrollArea)
 from .workers import safe_error
 
 class LibraryPage:
@@ -24,8 +24,13 @@ class LibraryPage:
             e=QLineEdit();self.fields[k]=e;f.addRow(name,e)
         self.notes=QTextEdit();self.notes.setPlaceholderText('本地笔记');f.addRow('笔记',self.notes)
         self.membership_info=QLabel('');self.membership_info.setWordWrap(True);f.addRow('所属集合',self.membership_info);self.membership_add_button=self.button('加入集合',self.add_to_collection);self.membership_remove_button=self.button('移出当前集合',self.remove_from_collection);f.addRow(self.membership_add_button);f.addRow(self.membership_remove_button);
+        self.attachment_list=QListWidget();self.attachment_list.setMaximumHeight(130);self.attachment_list.currentRowChanged.connect(self.update_attachment_controls);f.addRow('PDF 附件',self.attachment_list)
+        self.attachment_role=QComboBox();self.attachment_role.addItem('补充材料','supplement');self.attachment_role.addItem('已有译文','translation');f.addRow('导入附件类型',self.attachment_role)
+        self.attachment_add_button=self.button('添加 PDF 附件',self.add_attachment);self.attachment_read_button=self.button('阅读选中附件',self.read_attachment);self.attachment_delete_button=self.button('删除选中附件',self.remove_attachment)
+        f.addRow(self.attachment_add_button);f.addRow(self.attachment_read_button);f.addRow(self.attachment_delete_button)
         f.addRow(self.button('保存条目',self.save_doc,True));self.read_button=self.button('阅读文献',self.open_original);f.addRow(self.read_button);f.addRow(self.button('删除条目',self.delete_doc))
-        split.addWidget(inspector);split.setSizes([210,520,300]);l.addWidget(split,1)
+        inspector_scroll=QScrollArea();inspector_scroll.setWidgetResizable(True);inspector_scroll.setWidget(inspector);inspector_scroll.setMinimumWidth(300)
+        split.addWidget(inspector_scroll);split.setSizes([210,520,300]);l.addWidget(split,1)
         self.empty=QLabel('还没有文献，请先导入本地 PDF。');self.empty.setObjectName('muted');l.addWidget(self.empty)
 
     def selected(self):
@@ -35,7 +40,7 @@ class LibraryPage:
     def filter_docs(self):
         if not hasattr(self,'document_list'):return
         self.collection_edit_button.setEnabled(self.current_collection() is not None);self.collection_delete_button.setEnabled(self.current_collection() is not None);self.include_children.setEnabled(self.current_collection() is not None)
-        current=self.selected();self.document_list.clear()
+        current=self.selected();self.document_list.blockSignals(True);self.document_list.clear()
         collection=self.current_collection()
         matches=self.service.search_documents(text=self.search.text(),collection_id=collection,
             unfiled=self.collection_view()=='__unfiled__',tags=[item.text() for item in self.tag_filter.selectedItems()],
@@ -43,6 +48,7 @@ class LibraryPage:
         for d in matches:
             self.document_list.addItem(d['title']);item=self.document_list.item(self.document_list.count()-1);item.setData(Qt.ItemDataRole.UserRole,d);item.setToolTip(d['title'])
             if current and current['id']==d['id']:self.document_list.setCurrentItem(item)
+        self.document_list.blockSignals(False);self.select_doc(self.document_list.currentRow())
         if hasattr(self,'empty'):
             self.empty.setVisible(self.document_list.count()==0);self.empty.setText('当前集合或筛选下没有文献。' if self.docs else '还没有文献，请先导入本地 PDF。')
 
@@ -54,6 +60,7 @@ class LibraryPage:
         member_ids=self.service.document_collections(d['id']) if d else []
         self.membership_info.setText('、'.join(collections[i] for i in member_ids) or '未分类')
         self.membership_add_button.setEnabled(bool(d));self.membership_remove_button.setEnabled(bool(d) and self.current_collection() in member_ids)
+        self.refresh_attachments()
 
     def collection_view(self):
         item=self.collection_tree.currentItem()
@@ -177,6 +184,67 @@ class LibraryPage:
 
     def delete_doc(self):
         d=self.selected()
-        if d and QMessageBox.question(self,'删除条目','删除本地条目及关联数据？原始导入文件不受影响。')==QMessageBox.StandardButton.Yes:
-            self.guard(lambda:self.service.delete_document(d['id']));self.refresh()
+        if not d or self.io_worker is not None or self._closing:return
+        if QMessageBox.question(self,'删除条目','删除本地条目及所有 PDF 附件、翻译任务、摘要和笔记？原始导入文件不受影响。')!=QMessageBox.StandardButton.Yes:return
+        identifier=d['id']
+        def ready(_):
+            if self.reader_document and (self.reader_document.get('parentDocumentId') or self.reader_document['id'])==identifier:self.clear_reader()
+            self.refresh()
+        self.run_io(lambda:self.service.delete_document(identifier),ready,'正在删除文献及附件…')
 
+    def attachment_label(self,row):
+        role={'original':'原文','supplement':'补充材料','translation':'已有译文'}.get(row['role'],row['role'])
+        return f"{role} · {row.get('filename',row.get('label','PDF'))}"
+
+    def pdf_choices(self):
+        choices=[]
+        for parent in self.docs:
+            for row in self.service.list_attachments(parent['id']):
+                choices.append((f"{parent['title']} · {self.attachment_label(row)}",row['documentId']))
+        return choices
+
+    def selected_attachment(self):
+        item=self.attachment_list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def refresh_attachments(self):
+        if not hasattr(self,'attachment_list'):return
+        previous=self.selected_attachment();parent=self.selected();self.attachment_list.clear()
+        if parent:
+            for row in self.service.list_attachments(parent['id']):
+                self.attachment_list.addItem(self.attachment_label(row));item=self.attachment_list.item(self.attachment_list.count()-1);item.setData(Qt.ItemDataRole.UserRole,row);item.setToolTip(row['filename'])
+                if previous and previous['documentId']==row['documentId']:self.attachment_list.setCurrentItem(item)
+            if self.attachment_list.currentRow()<0:self.attachment_list.setCurrentRow(0)
+        self.update_attachment_controls()
+
+    def update_attachment_controls(self,*args):
+        if not hasattr(self,'attachment_add_button'):return
+        busy=self.io_worker is not None or self._closing
+        parent=self.selected();row=self.selected_attachment()
+        self.attachment_list.setEnabled(not busy);self.attachment_role.setEnabled(not busy)
+        self.attachment_add_button.setEnabled(bool(parent) and not busy)
+        self.attachment_read_button.setEnabled(bool(row) and not busy)
+        self.attachment_delete_button.setEnabled(bool(row and row['role']!='original') and not busy)
+
+    def add_attachment(self):
+        parent=self.selected()
+        if not parent or self.io_worker is not None or self._closing:return
+        path,_=QFileDialog.getOpenFileName(self,'添加本地 PDF 附件','','PDF (*.pdf)')
+        if not path:return
+        role=self.attachment_role.currentData();identifier=parent['id']
+        self.run_io(lambda:self.service.import_attachment(identifier,path,role),lambda row:self.refresh(),'正在导入附件…')
+
+    def read_attachment(self):
+        row=self.selected_attachment()
+        if row and self.io_worker is None and not self._closing:self.open_document(row['documentId'])
+
+    def remove_attachment(self):
+        parent=self.selected();row=self.selected_attachment()
+        if not parent or not row or row['role']=='original' or self.io_worker is not None or self._closing:return
+        message=f"删除附件“{row['filename']}”及该附件的翻译任务、摘要、证据笔记？原始导入文件和主文献保留。"
+        if QMessageBox.question(self,'删除 PDF 附件',message)!=QMessageBox.StandardButton.Yes:return
+        identifier=parent['id'];child=row['documentId']
+        def ready(_):
+            if self.reader_document and self.reader_document['id']==child:self.clear_reader()
+            self.refresh()
+        self.run_io(lambda:self.service.delete_attachment(identifier,child),ready,'正在删除附件…')

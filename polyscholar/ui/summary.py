@@ -37,7 +37,7 @@ class SummaryPage:
 
     def refresh_summary_items(self):
         previous=self.evidence_doc.currentData();self.evidence_doc.blockSignals(True);self.evidence_doc.clear()
-        for document in self.docs:self.evidence_doc.addItem(document['title'],document['id'])
+        for label,identifier in self.pdf_choices():self.evidence_doc.addItem(label,identifier)
         index=self.evidence_doc.findData(previous)
         if index>=0:self.evidence_doc.setCurrentIndex(index)
         self.evidence_doc.blockSignals(False);self.load_evidence()

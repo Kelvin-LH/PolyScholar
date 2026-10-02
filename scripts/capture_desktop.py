@@ -6,7 +6,7 @@ import sys
 import tempfile
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QScrollArea
 from PySide6.QtGui import QPdfWriter,QPainter
 from polyscholar.app import Window,STYLE
 from polyscholar.service import LocalService
@@ -25,10 +25,18 @@ def main():
             doc=service.import_pdf(path)
             service.update_document(doc['id'],{'title':title,'authors':'Demo Author','tags':['方法','待阅读'],'notes':'合成 PDF，仅用于界面验证。'})
             service.set_membership(doc['id'],child['id'])
+            supplement=root/f'supplement-{i}.pdf';writer=QPdfWriter(str(supplement));painter=QPainter(writer)
+            painter.drawText(100,100,f'Synthetic supplement {i}');painter.end();del painter,writer
+            service.import_attachment(doc['id'],supplement,'supplement')
         window=Window(service)
         try:
             window.show();app.processEvents();window.document_list.setCurrentRow(0)
             app.processEvents();window.grab().save(str(args.output/'library-python.png'))
+            window.attachment_list.setCurrentRow(1)
+            attachment_scroll=window.attachment_list.parentWidget()
+            while attachment_scroll and not isinstance(attachment_scroll,QScrollArea):attachment_scroll=attachment_scroll.parentWidget()
+            if attachment_scroll:attachment_scroll.ensureWidgetVisible(window.attachment_delete_button)
+            app.processEvents();window.grab().save(str(args.output/'attachments-python.png'))
             window.nav.setCurrentRow(5);app.processEvents();window.grab().save(str(args.output/'settings-python.png'))
             service.parse_document(doc['id'])
             block=service.document_blocks(doc['id'])[0]

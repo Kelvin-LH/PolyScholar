@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 import uuid
 from .library import CollectionLibrary, normalize_tags
 from .document_ir import DocumentIRLibrary, IR_SCHEMA
+from .attachments import AttachmentLibrary, ATTACHMENT_SCHEMA
 from .exports import atomic_export
 from .instance import LibraryLock
 
@@ -26,7 +27,7 @@ SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeld
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
 
-class LocalStore(CollectionLibrary, DocumentIRLibrary):
+class LocalStore(CollectionLibrary, DocumentIRLibrary, AttachmentLibrary):
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -49,7 +50,7 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary):
         self.objects.mkdir(exist_ok=True)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version > 5:
+            if version > 6:
                 raise ValueError('本地数据库来自更新版本，请升级应用。')
             if version == 1:
                 backup = self.root / 'library-before-v2.sqlite3'
@@ -91,6 +92,16 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary):
                         target.close()
                     if os.name == 'posix':
                         backup.chmod(0o600)
+            if version in (1, 2, 3, 4, 5):
+                backup = self.root / 'library-before-v6.sqlite3'
+                if not backup.exists():
+                    target = sqlite3.connect(backup)
+                    try:
+                        db.backup(target)
+                    finally:
+                        target.close()
+                    if os.name == 'posix':
+                        backup.chmod(0o600)
             db.executescript('''
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS desktop_documents(id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, data TEXT NOT NULL);
@@ -105,7 +116,7 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary):
                     PRIMARY KEY(document_id,collection_id));
                 CREATE INDEX IF NOT EXISTS desktop_memberships_collection ON desktop_memberships(collection_id);
             ''')
-            db.executescript('BEGIN IMMEDIATE;\n' + IR_SCHEMA + '\nPRAGMA user_version=5;\nCOMMIT;')
+            db.executescript('BEGIN IMMEDIATE;\n' + IR_SCHEMA + '\n' + ATTACHMENT_SCHEMA + '\nPRAGMA user_version=6;\nCOMMIT;')
         values = ','.join("'"+point+"'" for point in sorted(AUDIT_POINTS))
         with self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -144,9 +155,13 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary):
     def document(self, document_id):
         with self.connection() as db:
             row = db.execute('SELECT data FROM desktop_documents WHERE id=?', (document_id,)).fetchone()
+            owner = db.execute('SELECT parent_document_id FROM desktop_attachment_links WHERE child_document_id=?', (document_id,)).fetchone()
         if not row:
             raise ValueError('文献不存在。')
-        return json.loads(row[0])
+        document = json.loads(row[0])
+        if owner:
+            document['parentDocumentId'] = owner[0]
+        return document
 
     def object_path(self, document):
         digest = document['sha256']
@@ -155,6 +170,9 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary):
         return self.objects / (digest + '.pdf')
 
     def import_pdf(self, path):
+        return self._import_pdf(path)
+
+    def _import_pdf(self, path, parent_id=None, role=None):
         source = Path(path)
         if not source.is_file() or source.stat().st_size > MAX_PDF:
             raise ValueError('请选择不超过 100 MiB 的 PDF 文件。')
@@ -164,33 +182,63 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary):
             raise ValueError('PDF 文件无效或过大。')
         digest = hashlib.sha256(data).hexdigest()
         with self.lock:
-            existing = next((d for d in self.list_documents() if d['sha256'] == digest), None)
-            if existing:
-                sources=existing.get('sourcePaths',[])
-                source_path=str(source.resolve())
-                if source_path not in sources:
-                    existing['sourcePaths']=[*sources,source_path]
-                    with self.connection() as db:
-                        db.execute('UPDATE desktop_documents SET data=? WHERE id=?',(json.dumps(existing,ensure_ascii=False),existing['id']))
-                return existing
-            document = dict(id=str(uuid.uuid4()), title=source.stem or '未命名文献', authors='', doi='', year='', tags=[], notes='',
-                            sha256=digest, filename=source.name, sizeBytes=len(data), createdAt=timestamp(),sourcePaths=[str(source.resolve())])
-            target = self.object_path(document)
-            if not target.exists():
-                temporary = self.objects / (str(uuid.uuid4()) + '.tmp')
-                try:
-                    with temporary.open('xb') as stream:
-                        stream.write(data)
-                    temporary.chmod(stat.S_IRUSR)
-                    os.replace(temporary, target)
-                finally:
-                    if temporary.exists():
-                        temporary.chmod(stat.S_IRUSR | stat.S_IWUSR)
-                        temporary.unlink()
-            with self.connection() as db:
-                db.execute('INSERT INTO desktop_documents VALUES(?,?,?)', (document['id'], digest, json.dumps(document, ensure_ascii=False)))
-            self.audit('document_imported')
-            return document
+            target = self.objects / (digest + '.pdf')
+            created_object = False
+            try:
+                with self.connection() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    if parent_id is not None:
+                        self._require_root(db, parent_id)
+                    row = db.execute('SELECT data FROM desktop_documents WHERE sha256=?', (digest,)).fetchone()
+                    if row:
+                        existing = json.loads(row[0])
+                        owner = db.execute('SELECT parent_document_id FROM desktop_attachment_links WHERE child_document_id=?',
+                                           (existing['id'],)).fetchone()
+                        if parent_id is not None:
+                            if existing['id'] == parent_id:
+                                raise ValueError('该 PDF 已是条目的原始文献。')
+                            if not owner or owner[0] != parent_id:
+                                raise ValueError('该 PDF 已属于另一文献条目，不能重复归属。')
+                        sources = existing.get('sourcePaths', [])
+                        source_path = str(source.resolve())
+                        if source_path not in sources:
+                            existing['sourcePaths'] = [*sources, source_path]
+                            db.execute('UPDATE desktop_documents SET data=? WHERE id=?',
+                                       (json.dumps(existing, ensure_ascii=False), existing['id']))
+                        return existing
+                    document = dict(id=str(uuid.uuid4()), title=source.stem or '未命名文献', authors='', doi='', year='', tags=[], notes='',
+                                    sha256=digest, filename=source.name, sizeBytes=len(data), createdAt=timestamp(),
+                                    sourcePaths=[str(source.resolve())])
+                    if not target.exists():
+                        temporary = self.objects / (str(uuid.uuid4()) + '.tmp')
+                        try:
+                            with temporary.open('xb') as stream:
+                                stream.write(data)
+                                stream.flush()
+                                os.fsync(stream.fileno())
+                            temporary.chmod(stat.S_IRUSR)
+                            os.replace(temporary, target)
+                            created_object = True
+                        finally:
+                            if temporary.exists():
+                                temporary.chmod(stat.S_IRUSR | stat.S_IWUSR)
+                                temporary.unlink()
+                    db.execute('INSERT INTO desktop_documents VALUES(?,?,?)',
+                               (document['id'], digest, json.dumps(document, ensure_ascii=False)))
+                    if parent_id is not None:
+                        db.execute('INSERT INTO desktop_attachment_links VALUES(?,?,?,?)',
+                                   (parent_id, document['id'], role, source.name[:1024]))
+                    db.execute('INSERT INTO desktop_audit(point,outcome,created_at) VALUES(?,?,?)',
+                               ('document_imported', 'succeeded', timestamp()))
+                return document
+            except Exception:
+                # The database transaction rolls back both document and link. Only
+                # remove an object created here, never an existing immutable PDF.
+                if created_object:
+                    if os.name == 'nt':
+                        target.chmod(stat.S_IWRITE)
+                    target.unlink(missing_ok=True)
+                raise
 
     def update_document(self, document_id, patch):
         fields = {'title', 'authors', 'doi', 'year', 'tags', 'notes'}
@@ -214,16 +262,29 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary):
 
     def delete_document(self, document_id):
         with self.lock:
-            document = self.document(document_id)
-            jobs = [j for j in self.list_jobs() if j['documentId'] == document_id]
+            with self.connection() as db:
+                self._require_root(db, document_id)
+                children = [row[0] for row in db.execute(
+                    'SELECT child_document_id FROM desktop_attachment_links WHERE parent_document_id=?', (document_id,))]
+            self._delete_documents([document_id, *children])
+
+    def _delete_documents(self, document_ids):
+        with self.lock:
+            documents = [self.document(identifier) for identifier in document_ids]
+            jobs = [j for j in self.list_jobs() if j['documentId'] in document_ids]
+            slots = ','.join('?' for _ in document_ids)
             with self.connection() as db:
                 db.execute('BEGIN IMMEDIATE')
-                if db.execute("SELECT 1 FROM desktop_jobs WHERE document_id=? AND state IN ('queued','running')", (document_id,)).fetchone():
+                if db.execute(f"SELECT 1 FROM desktop_jobs WHERE document_id IN ({slots}) AND state IN ('queued','running')",
+                              document_ids).fetchone():
                     raise ValueError('请等待当前翻译任务结束后删除。')
-                db.execute('DELETE FROM desktop_jobs WHERE document_id=?', (document_id,))
-                db.execute('DELETE FROM desktop_documents WHERE id=?', (document_id,))
-                referenced = db.execute('SELECT 1 FROM desktop_documents WHERE sha256=?', (document['sha256'],)).fetchone()
-            if not referenced:
+                db.execute(f'DELETE FROM desktop_jobs WHERE document_id IN ({slots})', document_ids)
+                db.execute(f'DELETE FROM desktop_documents WHERE id IN ({slots})', document_ids)
+                unused = [document for document in documents if not db.execute(
+                    'SELECT 1 FROM desktop_documents WHERE sha256=?', (document['sha256'],)).fetchone()]
+                db.execute('INSERT INTO desktop_audit(point,outcome,created_at) VALUES(?,?,?)',
+                           ('document_deleted', 'succeeded', timestamp()))
+            for document in unused:
                 path = self.object_path(document)
                 if os.name == 'nt' and path.exists():
                     path.chmod(stat.S_IWRITE)
@@ -231,10 +292,8 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary):
             import shutil
             for job in jobs:
                 output = self.output_path(job)
-                # Only delete a UUID task directory, never an arbitrary stored directory.
                 if output.name == job['id'] and output.parent.name == 'jobs':
                     shutil.rmtree(output, ignore_errors=True)
-            self.audit('document_deleted')
 
     def read_pdf(self, document_id):
         return self.read_bounded_pdf(self.object_path(self.document(document_id)))

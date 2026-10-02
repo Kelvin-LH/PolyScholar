@@ -46,3 +46,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/smoke_evidence.py
+      - name: Check managed PDF attachment identity and native workflows
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_attachments.py

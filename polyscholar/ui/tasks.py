@@ -11,13 +11,20 @@ class TasksPage:
         self.pages.textChanged.connect(self.refresh_boundary);self.refresh_boundary()
         self.job_table=QTableWidget(0,6);self.job_table.setHorizontalHeaderLabels(['文献','引擎','状态','进度','用量','操作']);self.job_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch);l.addWidget(self.job_table,1)
 
+    def refresh_task_items(self):
+        previous=self.task_doc.currentData();self.task_doc.blockSignals(True);self.task_doc.clear()
+        for label,identifier in self.pdf_choices():self.task_doc.addItem(label,identifier)
+        index=self.task_doc.findData(previous)
+        if index>=0:self.task_doc.setCurrentIndex(index)
+        self.task_doc.blockSignals(False)
+
     def start_job(self):
         doc_id=self.task_doc.currentData()
         if doc_id:self.guard(lambda:self.service.start_translation(doc_id,self.pages.text().strip()));self.refresh_jobs()
 
     def refresh_jobs(self):
         self.jobs=self.service.list_jobs();self.job_table.clearContents();self.job_table.setRowCount(len(self.jobs))
-        names={d['id']:d['title'] for d in self.docs};states={'queued':'等待中','running':'翻译中','completed':'已完成','failed':'失败'}
+        names={identifier:label for label,identifier in self.pdf_choices()};states={'queued':'等待中','running':'翻译中','completed':'已完成','failed':'失败'}
         for i,j in enumerate(self.jobs):
             for c,value in enumerate([names.get(j.get('documentId'),'文献'),j.get('engine',''),states.get(j.get('state'),j.get('state',''))]):self.job_table.setItem(i,c,QTableWidgetItem(value))
             self.job_table.setItem(i,3,QTableWidgetItem(valid_progress(j.get('progress'))))

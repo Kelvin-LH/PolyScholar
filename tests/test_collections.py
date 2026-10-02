@@ -91,6 +91,6 @@ class CollectionTests(unittest.TestCase):
         finally:db.close()
         self.assertEqual(reopened.document(self.document['id'])['title'],self.document['title'])
         self.assertEqual(hashlib.sha256(reopened.read_pdf(self.document['id'])).digest(),hashlib.sha256(original).digest())
-        with reopened.connection() as db:self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],5)
+        with reopened.connection() as db:self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],6)
         reopened.create_collection('After migration')
         self.assertEqual(len(reopened.list_collections()),1)

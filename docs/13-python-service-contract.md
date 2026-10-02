@@ -65,3 +65,14 @@
 每项包含 `text,category,attribution,evidence`。类别为 question/method/data/result/limitation/reproducibility/other，归属为 author_report/model_inference。引用必须是本次输入块内的逐字摘录；页码由本地数据生成。无引用的条目标记缺少证据。输入版本改变、伪造来源或任一条目无效时整批不保存。
 
 SQLite v5 在升级前备份 `library-before-v5.sqlite3`，保存批次模型、实际有效 token 用量、输入块 ID、生成时间以及类别/归属。手写笔记与模型摘要分开标记，重解析后旧结果保留并提示引用失效。模型归属标签本身仍需人工核对。
+
+
+## 托管多 PDF 附件（v6）
+
+`list_documents/search_documents` 返回主条目，内部 `LocalStore.list_documents` 仍返回所有 PDF 以保留去重与导出保护。`list_attachments(parent_id)` 返回原始 PDF 和子附件，其 `id/documentId` 均为真实 PDF 内容身份，另有 `parentDocumentId,role,filename,label,sha256`。原始 PDF role=original，新增支持 supplement/translation。
+
+`import_attachment(parent_id,path,role='supplement')` 原子建立子文献和附件关系；不增加文献库主条目。相同归属重复导入保留原角色及 ID，另一归属拒绝。普通 `import_pdf` 重复导入隐藏子附件会返回所属主条目。
+
+`delete_attachment(parent_id,document_id)` 仅删除额外附件；根 PDF 必须通过 `delete_document` 删除整个条目。两种删除均检查相应子任务，且删除整个条目检查所有子附件；保留外部原文件，清理拥有的对象、任务与证据。集合和原生书目引用列表只使用根条目。读取、解析、模型摘要和翻译依旧接受对应 PDF 的独立 ID，不将子附件内容与主 PDF 混用。
+
+v6 升级前备份 `library-before-v6.sqlite3`。当前不支持外部链接、非 PDF 附件或主 PDF 替换。

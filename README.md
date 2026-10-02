@@ -21,7 +21,7 @@
 
 ## 核心功能
 
-- **本地文献库**：集合与子集合、PDF 导入、文件去重、标签筛选与笔记，文献管理对标 Zotero。
+- **本地文献库**：集合与子集合、多 PDF 附件、文件去重、标签筛选与笔记，文献管理对标 Zotero。
 - **双引擎翻译**：集成 [BabelDOC](https://github.com/funstory-ai/BabelDOC) 与 [PDFMathTranslate](https://github.com/PDFMathTranslate/PDFMathTranslate)，原文与译文分开保存。
 - **双语阅读**：原文与译文并排显示，在桌面内完成阅读。
 - **证据摘要**：勾选原文生成结构化模型摘要，保留引用与手写笔记，可跳转原文并提示旧引用失效。
@@ -66,6 +66,8 @@ Python / PySide6 原型，使用合成测试 PDF。
 ![原生文献库](design/screenshots/library-python.png)
 
 ![原生设置](design/screenshots/settings-python.png)
+
+![原生文献附件](design/screenshots/attachments-python.png)
 
 ![原生证据摘要与笔记](design/screenshots/evidence-python.png)
 

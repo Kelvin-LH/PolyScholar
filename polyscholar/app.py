@@ -68,10 +68,7 @@ class Window(LibraryPage, ReaderPage, TasksPage, SummaryPage, CitationsPage, Set
 
     def refresh(self):
         self.docs=self.service.list_documents();self.refresh_organization();self.filter_docs()
-        previous=self.task_doc.currentData();self.task_doc.clear()
-        for d in self.docs:self.task_doc.addItem(d['title'],d['id'])
-        index=self.task_doc.findData(previous)
-        if index>=0:self.task_doc.setCurrentIndex(index)
+        self.refresh_task_items()
         self.refresh_jobs();self.refresh_citation_items();self.refresh_summary_items()
 
     def on_job_changed(self,event):
@@ -80,9 +77,9 @@ class Window(LibraryPage, ReaderPage, TasksPage, SummaryPage, CitationsPage, Set
     def run_io(self,work,ready,message):
         if self.io_worker is not None or self._closing:return
         self.io_status.setText(message)
-        for button in (self.import_button,self.read_button,self.reader_result):button.setEnabled(False)
+        for button in (self.import_button,self.read_button,self.reader_result,self.reader_source):button.setEnabled(False)
         worker=IOWorker(work,self);self.io_worker=worker
-        self.update_evidence_controls()
+        self.update_evidence_controls();self.update_attachment_controls()
         worker.ready.connect(lambda value:self.guard(lambda:ready(value)) if not self._closing else None,Qt.ConnectionType.QueuedConnection)
         worker.failed.connect(lambda message:QMessageBox.warning(self,'操作未完成',message) if not self._closing else None,Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(self.io_finished,Qt.ConnectionType.QueuedConnection);worker.start()
@@ -91,8 +88,8 @@ class Window(LibraryPage, ReaderPage, TasksPage, SummaryPage, CitationsPage, Set
         worker=self.io_worker;self.io_worker=None
         if worker:worker.deleteLater()
         self.io_status.setText('')
-        for button in (self.import_button,self.read_button,self.reader_result):button.setEnabled(True)
-        self.update_evidence_controls()
+        for button in (self.import_button,self.read_button,self.reader_result,self.reader_source):button.setEnabled(True)
+        self.update_evidence_controls();self.update_attachment_controls()
         if self._closing:self.close()
 
     def closeEvent(self,event:QCloseEvent):

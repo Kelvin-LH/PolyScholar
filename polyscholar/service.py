@@ -110,7 +110,16 @@ class LocalService:
         self.store.audit('diagnostics_exported')
 
     def list_documents(self):
-        return self.store.list_documents()
+        return self.store.list_root_documents()
+
+    def list_attachments(self, parent_id):
+        return self.store.list_attachments(parent_id)
+
+    def import_attachment(self, parent_id, path, role='supplement'):
+        return self.store.import_attachment(parent_id, path, role)
+
+    def delete_attachment(self, parent_id, document_id):
+        return self.store.delete_attachment(parent_id, document_id)
 
     def parse_document(self, document_id):
         document = self.store.document(document_id)
@@ -244,7 +253,13 @@ class LocalService:
         return self.store.search_documents(**criteria)
 
     def import_pdf(self, path):
-        return self.store.import_pdf(path)
+        document = self.store.import_pdf(path)
+        # Ordinary library import deduplicates to the bibliographic root, while
+        # attachment import keeps the individual PDF identity for reading/jobs.
+        with self.store.connection() as db:
+            owner = db.execute('SELECT parent_document_id FROM desktop_attachment_links WHERE child_document_id=?',
+                               (document['id'],)).fetchone()
+        return self.store.document(owner[0]) if owner else document
 
     def update_document(self, document_id, patch):
         return self.store.update_document(document_id, patch)
