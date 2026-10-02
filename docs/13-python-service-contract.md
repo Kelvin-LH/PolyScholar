@@ -76,3 +76,12 @@ SQLite v5 在升级前备份 `library-before-v5.sqlite3`，保存批次模型、
 `delete_attachment(parent_id,document_id)` 仅删除额外附件；根 PDF 必须通过 `delete_document` 删除整个条目。两种删除均检查相应子任务，且删除整个条目检查所有子附件；保留外部原文件，清理拥有的对象、任务与证据。集合和原生书目引用列表只使用根条目。读取、解析、模型摘要和翻译依旧接受对应 PDF 的独立 ID，不将子附件内容与主 PDF 混用。
 
 v6 升级前备份 `library-before-v6.sqlite3`。当前不支持外部链接、非 PDF 附件或主 PDF 替换。
+
+
+## 类型化文献信息（保持 v6）
+
+`update_document` 支持 `itemType`：article-journal、paper-conference、book、thesis。`creators` 为有序列表，含 role=author/editor、type=person/organization；个人使用 literal 或 family/given，机构仅 literal。旧作者文本只按分号分隔，保留完整姓名，不推断姓与名。普通字段编辑保留作者身份与顺序。
+
+出版字段包含 publicationTitle、publisher、place、date、volume、issue、pages、isbn、edition、eventTitle、institution、thesisType。日期采用 ASCII YYYY / YYYY-MM / YYYY-MM-DD 并校验日历；日期与年份冲突在写入前拒绝。切换类型保留暂不适用字段，界面提示，导出仅包含当前类型适用字段。现有 v6 JSON 扩展不需要 SQL 迁移或重写文件 ID。
+
+CSL JSON 保留类型、作者/编者角色、日期和出版字段；BibTeX 普通学位论文使用 @misc 加 type，避免推断为博士；RIS 保留 AU/A2 与类型、出版字段。导出清理控制字符及 Unicode 换行符，BibTeX 转义特殊字符；预览与保存一致。子 PDF 附件不能独立导出书目引用。RIS 不具有与本地结构化作者相同的身份语义，尚不承诺外部导入无损往返或 CSL 样式排版。字段参考 [CSL schema](https://github.com/citation-style-language/schema/blob/master/schemas/input/csl-data.json) 和 [Zotero BibTeX translator](https://github.com/zotero/translators/blob/master/BibTeX.js)。

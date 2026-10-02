@@ -17,6 +17,7 @@ from .document_ir import DocumentIRLibrary, IR_SCHEMA
 from .attachments import AttachmentLibrary, ATTACHMENT_SCHEMA
 from .exports import atomic_export
 from .instance import LibraryLock
+from .metadata import BIB_FIELDS, metadata_patch
 
 AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported'})
 
@@ -241,10 +242,12 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary, AttachmentLibrary):
                 raise
 
     def update_document(self, document_id, patch):
-        fields = {'title', 'authors', 'doi', 'year', 'tags', 'notes'}
+        fields = {'title', 'authors', 'doi', 'year', 'tags', 'notes', 'itemType', 'creators', *BIB_FIELDS}
         if not isinstance(patch, dict) or set(patch) - fields:
             raise ValueError('文献修改字段无效。')
         for key, value in patch.items():
+            if key == 'creators':
+                continue
             if key == 'tags':
                 patch = {**patch, 'tags': normalize_tags(value)}
             elif not isinstance(value, str):
@@ -253,7 +256,7 @@ class LocalStore(CollectionLibrary, DocumentIRLibrary, AttachmentLibrary):
                 raise ValueError('每个文献元数据字段不能超过 64 KiB。')
         with self.lock:
             document = self.document(document_id)
-            document.update(patch)
+            document = metadata_patch(document, patch)
             if not document['title'].strip():
                 raise ValueError('标题不能为空。')
             with self.connection() as db:

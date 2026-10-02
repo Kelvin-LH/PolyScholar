@@ -14,6 +14,7 @@ import uuid
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from .store import LocalStore
+from .metadata import exchange_metadata
 from .summary_model import selected_blocks, request_summary
 from integrations.engines import VERSIONS, limited_environment
 
@@ -485,6 +486,8 @@ class LocalService:
         if not isinstance(identifiers, list) or any(not isinstance(value, str) for value in identifiers):
             raise ValueError('文献导出列表无效。')
         documents = [self.store.document(value) for value in dict.fromkeys(identifiers)]
+        if any(document.get('parentDocumentId') for document in documents):
+            raise ValueError('附件不能单独导出引用，请选择所属文献。')
         bodies = [self._metadata(document, format) for document in documents]
         if format == 'csl-json':
             return json.dumps([json.loads(value)[0] for value in bodies], ensure_ascii=False, indent=2)
@@ -493,28 +496,7 @@ class LocalService:
         raise ValueError('不支持的元数据格式。')
 
     def _metadata(self, document, format):
-        authors = [a.strip() for a in document['authors'].split(';') if a.strip()]
-        def line(value):
-            return value.replace('\r', ' ').replace('\n', ' ')
-        def bib(value):
-            return ''.join('\\textbackslash{}' if c == '\\' else '\\' + c if c in '{}' else c for c in line(value))
-        if format == 'csl-json':
-            item = dict(id=document['id'], type='article-journal', title=document['title'], author=[{'literal': a} for a in authors])
-            if document['doi']:
-                item['DOI'] = document['doi']
-            if re.fullmatch(r'\d{4}', document['year']):
-                item['issued'] = {'date-parts': [[int(document['year'])]]}
-            body = json.dumps([item], ensure_ascii=False, indent=2)
-        elif format == 'bibtex':
-            body = '@article{polyscholar_' + document['id'].replace('-', '_') + ',\n' + ',\n'.join(
-                '  ' + key + ' = {' + bib(value) + '}' for key, value in [('title', document['title']), ('author', ' and '.join(authors)),
-                ('year', document['year']), ('doi', document['doi'])]) + '\n}\n'
-        elif format == 'ris':
-            body = '\n'.join(['TY  - JOUR', 'TI  - ' + line(document['title'])] + ['AU  - ' + line(a) for a in authors] +
-                             ['PY  - ' + line(document['year']), 'DO  - ' + line(document['doi']), 'ER  -']) + '\n'
-        else:
-            raise ValueError('不支持的元数据格式。')
-        return body
+        return exchange_metadata(document, format)
 
     def close(self):
         with self._lock:

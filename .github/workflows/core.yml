@@ -50,3 +50,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/smoke_attachments.py
+      - name: Check typed metadata and ordered creator workflows
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_metadata.py

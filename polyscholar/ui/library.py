@@ -2,6 +2,8 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, QListWidget, QLineEdit, QFileDialog, QMessageBox, QFormLayout, QTextEdit, QSplitter, QInputDialog, QTreeWidget, QTreeWidgetItem, QCheckBox, QAbstractItemView, QDialog, QDialogButtonBox, QComboBox, QScrollArea)
 from .workers import safe_error
+from .creators import CreatorsDialog
+from ..metadata import APPLICABLE, legacy_creators, creator_display
 
 class LibraryPage:
     def library(self):
@@ -19,9 +21,21 @@ class LibraryPage:
         tag_actions=QHBoxLayout();tag_actions.addWidget(self.button('重命名',self.rename_selected_tag));tag_actions.addWidget(self.button('删除标签',self.remove_selected_tag));ol.addLayout(tag_actions);ol.addWidget(self.button('清除筛选',self.clear_filters))
         split.addWidget(organize)
         self.document_list=QListWidget();self.document_list.setMinimumWidth(160);self.document_list.currentRowChanged.connect(self.select_doc);split.addWidget(self.document_list)
-        inspector=QWidget();inspector.setMinimumWidth(280);f=QFormLayout(inspector);self.fields={}
-        for k,name in [('title','标题'),('authors','作者'),('doi','DOI'),('year','年份'),('tags','标签')]:
+        inspector=QWidget();inspector.setMinimumWidth(280);f=QFormLayout(inspector);self.metadata_form=f;self.fields={};self._metadata_creators=[];self._authors_loaded=''
+        self.item_type=QComboBox()
+        for label,value in [('期刊论文','article-journal'),('会议论文','paper-conference'),('图书','book'),('学位论文','thesis')]:self.item_type.addItem(label,value)
+        f.addRow('条目类型',self.item_type);self.item_type.currentIndexChanged.connect(self.update_metadata_fields)
+        for k,name in [('title','标题'),('authors','完整姓名（兼容）'),('doi','DOI'),('year','年份'),('tags','标签')]:
             e=QLineEdit();self.fields[k]=e;f.addRow(name,e)
+        self.fields['authors'].setPlaceholderText('按分号分隔；修改将替换作者与编者')
+        self.creators_button=self.button('编辑作者与编者顺序',self.edit_creators);f.addRow(self.creators_button)
+        self.creator_info=QLabel('');self.creator_info.setWordWrap(True);f.addRow(self.creator_info)
+        for key,label in [('publicationTitle','期刊 / 论文集'),('publisher','出版者'),('place','出版地'),('date','日期'),('volume','卷'),('issue','期'),('pages','页码'),('isbn','ISBN'),('edition','版次'),('eventTitle','会议名称'),('institution','授予机构'),('thesisType','学位类型')]:
+            editor=QLineEdit();self.fields[key]=editor;f.addRow(label,editor)
+        self.fields['date'].setPlaceholderText('YYYY / YYYY-MM / YYYY-MM-DD')
+        for key in ('publicationTitle','publisher','place','date','volume','issue','pages','isbn','edition','eventTitle','institution','thesisType'):self.fields[key].textChanged.connect(self.update_metadata_fields)
+        self.retained_fields_info=QLabel('切换类型保留已填写字段。');self.retained_fields_info.setWordWrap(True);f.addRow(self.retained_fields_info)
+        self.update_metadata_fields()
         self.notes=QTextEdit();self.notes.setPlaceholderText('本地笔记');f.addRow('笔记',self.notes)
         self.membership_info=QLabel('');self.membership_info.setWordWrap(True);f.addRow('所属集合',self.membership_info);self.membership_add_button=self.button('加入集合',self.add_to_collection);self.membership_remove_button=self.button('移出当前集合',self.remove_from_collection);f.addRow(self.membership_add_button);f.addRow(self.membership_remove_button);
         self.attachment_list=QListWidget();self.attachment_list.setMaximumHeight(130);self.attachment_list.currentRowChanged.connect(self.update_attachment_controls);f.addRow('PDF 附件',self.attachment_list)
@@ -55,7 +69,9 @@ class LibraryPage:
     def select_doc(self,_):
         d=self.selected() or {}
         for k,e in self.fields.items():e.setText((', '.join(d.get(k,[])) if k=='tags' else str(d.get(k,'') or '')))
-        self.notes.setPlainText(d.get('notes',''))
+        self._authors_loaded=self.fields['authors'].text();self._metadata_creators=[dict(c) for c in d.get('creators',legacy_creators(d.get('authors','')))]
+        self.item_type.setCurrentIndex(max(0,self.item_type.findData(d.get('itemType','article-journal'))));self.update_metadata_fields();self.update_creator_info()
+        self.creators_button.setEnabled(bool(d));self.notes.setPlainText(d.get('notes',''))
         collections={c['id']:c['name'] for c in self.service.list_collections()}
         member_ids=self.service.document_collections(d['id']) if d else []
         self.membership_info.setText('、'.join(collections[i] for i in member_ids) or '未分类')
@@ -180,7 +196,39 @@ class LibraryPage:
         d=self.selected()
         if not d:return
         data={k:e.text().strip() for k,e in self.fields.items()};data['tags']=[t.strip() for t in data['tags'].split(',') if t.strip()];data['notes']=self.notes.toPlainText()
-        self.guard(lambda:self.service.update_document(d['id'],data));self.refresh()
+        data['itemType']=self.item_type.currentData()
+        if data['authors']==self._authors_loaded:
+            data.pop('authors');data['creators']=[dict(c) for c in self._metadata_creators]
+        # Leave invalid drafts visible so a validation error can be corrected.
+        if self.guard(lambda:self.service.update_document(d['id'],data)) is not None:self.refresh()
+
+    def update_metadata_fields(self,*args):
+        visible=APPLICABLE.get(self.item_type.currentData(),set())
+        retained=[]
+        for key in ('publicationTitle','publisher','place','date','volume','issue','pages','isbn','edition','eventTitle','institution','thesisType'):
+            if key not in self.fields:continue
+            editor=self.fields[key];label=self.metadata_form.labelForField(editor);editor.setVisible(key in visible)
+            if label:label.setVisible(key in visible)
+            if key not in visible and editor.text().strip():retained.append(label.text() if label else key)
+        if hasattr(self,'retained_fields_info'):self.retained_fields_info.setText('切换类型保留已填写字段。'+('当前保留：'+ '、'.join(retained) if retained else ''))
+
+    def update_creator_info(self):
+        labels=[]
+        for creator in self._metadata_creators:
+            name=creator.get('literal') or ' '.join(filter(None,[creator.get('given'),creator.get('family')]))
+            labels.append(('编者：' if creator.get('role')=='editor' else '')+name)
+        self.creator_info.setText('；'.join(labels) or '尚未填写作者或编者。')
+
+    def edit_creators(self):
+        if not self.selected():return
+        creators=self._metadata_creators
+        if self.fields['authors'].text().strip()!=self._authors_loaded:
+            # A legacy line is one literal name, never split or guess personal names.
+            text=self.fields['authors'].text().strip()
+            creators=legacy_creators(text)
+        dialog=CreatorsDialog(creators,self)
+        if dialog.exec()==QDialog.DialogCode.Accepted:
+            self._metadata_creators=dialog.creators();self._authors_loaded='; '.join(creator_display(c) for c in self._metadata_creators if c['role']=='author');self.fields['authors'].setText(self._authors_loaded);self.update_creator_info()
 
     def delete_doc(self):
         d=self.selected()
