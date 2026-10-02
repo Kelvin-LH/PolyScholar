@@ -163,7 +163,7 @@ class DocumentIRTests(unittest.TestCase):
         self.assertEqual(self.store.list_jobs(), [job])
         self.assertEqual(self.store.object_path(self.doc).read_bytes(), original)
         with self.store.connection() as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 6)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 7)
             self.assertEqual(db.execute('SELECT * FROM desktop_audit').fetchall(), audit)
         with closing(sqlite3.connect(self.store.root / 'library-before-v4.sqlite3')) as backup:
             self.assertEqual(backup.execute('PRAGMA user_version').fetchone()[0], 3)
@@ -251,7 +251,7 @@ class DocumentIRTests(unittest.TestCase):
             self.assertEqual(backup.execute('PRAGMA user_version').fetchone()[0], 4)
             self.assertEqual(backup.execute('SELECT id FROM desktop_claims').fetchall(), [(manual['id'],)])
         with self.store.connection() as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 6)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 7)
             self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(), [])
 
     def test_model_input_scope_retains_uncited_blocks_and_refuses_evidence_outside_selection(self):

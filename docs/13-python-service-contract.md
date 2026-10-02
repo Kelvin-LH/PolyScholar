@@ -85,3 +85,14 @@ v6 升级前备份 `library-before-v6.sqlite3`。当前不支持外部链接、�
 出版字段包含 publicationTitle、publisher、place、date、volume、issue、pages、isbn、edition、eventTitle、institution、thesisType。日期采用 ASCII YYYY / YYYY-MM / YYYY-MM-DD 并校验日历；日期与年份冲突在写入前拒绝。切换类型保留暂不适用字段，界面提示，导出仅包含当前类型适用字段。现有 v6 JSON 扩展不需要 SQL 迁移或重写文件 ID。
 
 CSL JSON 保留类型、作者/编者角色、日期和出版字段；BibTeX 普通学位论文使用 @misc 加 type，避免推断为博士；RIS 保留 AU/A2 与类型、出版字段。导出清理控制字符及 Unicode 换行符，BibTeX 转义特殊字符；预览与保存一致。子 PDF 附件不能独立导出书目引用。RIS 不具有与本地结构化作者相同的身份语义，尚不承诺外部导入无损往返或 CSL 样式排版。字段参考 [CSL schema](https://github.com/citation-style-language/schema/blob/master/schemas/input/csl-data.json) 和 [Zotero BibTeX translator](https://github.com/zotero/translators/blob/master/BibTeX.js)。
+
+
+## 高级元数据检索与保存搜索（v7）
+
+`search_documents` 新增可选 `query={match:'all'|'any',conditions:[{field,operator,value}]}`，与既有快速搜索、集合、未分类和标签筛选取交集。字段为 title/creator/doi/year/itemType/publicationTitle/publisher/isbn/tag/notes；creator 包括个人、机构及编者的完整姓名或姓/名。文字支持 contains/not_contains/is/is_not/is_empty/is_not_empty，year 额外 before/after。Unicode casefold 比较，百分号及下划线按普通文字，未使用 SQL 通配符。多人/多标签负条件要求所有值均不匹配，空字段满足负条件；未知年份不参与数值比较。
+
+规则限制 1–20 条，每值最多 4 KiB；未知字段/操作、空条件和值、非 ASCII 数字的年份比较在执行前拒绝。类型转换保留的元数据也可被字段条件检索。搜索不读 PDF 正文，不联网，也不运行表达式代码。
+
+`list_saved_searches/save_saved_search(name,query,search_id=None)/delete_saved_search` 在本地保存命名规则，返回 id/name/query/createdAt/updatedAt。保存的是规则，不是结果 ID，也不自动保存当前集合/快速搜索范围；打开时动态计算并叠加界面当前筛选。规则编辑须主动更新保存项，取消不写库。SQLite v7 升级前备份 `library-before-v7.sqlite3`，新增保存搜索表，旧文献、附件、集合和证据保持。迁移的新表、审计触发器及版本号同事务；保存搜索新增/更新/删除审计与数据同事务，仅固定事件和时间。
+
+此增量对标 [Zotero 官方高级搜索与保存搜索](https://www.zotero.org/support/searching)，尚未包含全文索引、嵌套保存规则或日期相对条件。

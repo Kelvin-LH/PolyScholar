@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 from polyscholar.app import Window, STYLE
 from polyscholar.service import LocalService
 from polyscholar.ui.creators import CreatorsDialog
+from polyscholar.ui.searches import SearchDialog
 
 
 def main():
@@ -34,6 +35,13 @@ def main():
             window.grab().save(str(output / 'metadata-python.png'))
             dialog = CreatorsDialog(creators, window); dialog.show(); app.processEvents()
             dialog.grab().save(str(output / 'creators-python.png')); dialog.close()
+            query = dict(match='all', conditions=[dict(field='itemType', operator='is', value='book'),
+                dict(field='year', operator='after', value='2020')])
+            saved = service.save_saved_search('近年图书', query); window.refresh()
+            window.saved_searches.setCurrentIndex(window.saved_searches.findData(saved['id']))
+            app.processEvents(); window.grab().save(str(output / 'searches-python.png'))
+            dialog = SearchDialog(query, window); dialog.show(); app.processEvents()
+            dialog.grab().save(str(output / 'search-rules-python.png')); dialog.close()
         finally:
             window.close(); service.close()
     print('Synthetic native metadata screenshots saved')

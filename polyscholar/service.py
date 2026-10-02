@@ -253,6 +253,15 @@ class LocalService:
     def search_documents(self, **criteria):
         return self.store.search_documents(**criteria)
 
+    def list_saved_searches(self):
+        return self.store.list_saved_searches()
+
+    def save_saved_search(self, name, query, search_id=None):
+        return self.store.save_saved_search(name, query, search_id)
+
+    def delete_saved_search(self, search_id):
+        return self.store.delete_saved_search(search_id)
+
     def import_pdf(self, path):
         document = self.store.import_pdf(path)
         # Ordinary library import deduplicates to the bibliographic root, while

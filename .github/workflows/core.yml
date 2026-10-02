@@ -54,3 +54,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/smoke_metadata.py
+      - name: Check advanced metadata and dynamic saved searches
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_searches.py

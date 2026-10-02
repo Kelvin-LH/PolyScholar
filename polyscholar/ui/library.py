@@ -3,6 +3,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, QListWidget, QLineEdit, QFileDialog, QMessageBox, QFormLayout, QTextEdit, QSplitter, QInputDialog, QTreeWidget, QTreeWidgetItem, QCheckBox, QAbstractItemView, QDialog, QDialogButtonBox, QComboBox, QScrollArea)
 from .workers import safe_error
 from .creators import CreatorsDialog
+from .searches import SearchDialog
+from copy import deepcopy
 from ..metadata import APPLICABLE, legacy_creators, creator_display
 
 class LibraryPage:
@@ -10,6 +12,12 @@ class LibraryPage:
         l=self.page('文献库','本地整理文献、元数据与笔记。集合与标签管理将逐步对标 Zotero。')
         r=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('搜索标题、作者、DOI、标签');self.search.textChanged.connect(self.filter_docs)
         r.addWidget(self.search);self.import_button=self.button('导入 PDF',self.import_pdf,True);r.addWidget(self.import_button);l.addLayout(r)
+        self.advanced_query={'match':'all','conditions':[]};self._saved_query_changed=False
+        advanced=QHBoxLayout();self.advanced_search_button=self.button('高级元数据检索',self.edit_search);advanced.addWidget(self.advanced_search_button);self.saved_searches=QComboBox();self.saved_searches.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon);self.saved_searches.setMinimumContentsLength(8);self.saved_searches.addItem('未选择保存搜索',None);self.saved_searches.currentIndexChanged.connect(self.select_saved_search);advanced.addWidget(self.saved_searches,1);l.addLayout(advanced)
+        search_actions=QHBoxLayout();self.save_search_button=self.button('保存新搜索',self.save_new_search);search_actions.addWidget(self.save_search_button)
+        self.update_search_button=self.button('更新保存搜索',self.update_saved_search);search_actions.addWidget(self.update_search_button)
+        self.delete_search_button=self.button('删除搜索',self.delete_saved_search);search_actions.addWidget(self.delete_search_button);search_actions.addStretch();l.addLayout(search_actions)
+        self.search_scope=QLabel('');self.search_scope.setWordWrap(True);l.addWidget(self.search_scope);self.update_search_controls()
         self.io_status=QLabel('');l.addWidget(self.io_status)
         split=QSplitter()
         organize=QWidget();organize.setMinimumWidth(160);ol=QVBoxLayout(organize);ol.setContentsMargins(0,0,12,0)
@@ -58,7 +66,7 @@ class LibraryPage:
         collection=self.current_collection()
         matches=self.service.search_documents(text=self.search.text(),collection_id=collection,
             unfiled=self.collection_view()=='__unfiled__',tags=[item.text() for item in self.tag_filter.selectedItems()],
-            include_descendants=self.include_children.isChecked())
+            include_descendants=self.include_children.isChecked(),query=self.advanced_query if self.advanced_query['conditions'] else None)
         for d in matches:
             self.document_list.addItem(d['title']);item=self.document_list.item(self.document_list.count()-1);item.setData(Qt.ItemDataRole.UserRole,d);item.setToolTip(d['title'])
             if current and current['id']==d['id']:self.document_list.setCurrentItem(item)
@@ -104,6 +112,7 @@ class LibraryPage:
         for tag in self.service.list_tags():
             self.tag_filter.addItem(tag);item=self.tag_filter.item(self.tag_filter.count()-1);item.setSelected(tag in selected_tags)
         self.tag_filter.blockSignals(False)
+        self.refresh_saved_searches()
 
     def collection_picker(self,title,allow_root=False,exclude=None,current=None):
         collections=self.service.list_collections();by_id={c['id']:c for c in collections}
@@ -172,7 +181,53 @@ class LibraryPage:
             self.guard(lambda:self.service.rename_tag(tag,None));self.refresh()
 
     def clear_filters(self):
-        self.search.clear();self.tag_filter.clearSelection();self.include_children.setChecked(False)
+        self.advanced_query={'match':'all','conditions':[]};self._saved_query_changed=False;self.saved_searches.setCurrentIndex(0)
+        self.search.clear();self.tag_filter.clearSelection();self.include_children.setChecked(False);self.collection_tree.setCurrentItem(self.collection_tree.topLevelItem(0));self.update_search_controls();self.filter_docs()
+
+    def update_search_controls(self):
+        count=len(self.advanced_query['conditions']);selected=self.saved_searches.currentData() is not None
+        self.save_search_button.setEnabled(bool(count));self.update_search_button.setEnabled(selected and bool(count));self.delete_search_button.setEnabled(selected)
+        mode='全部' if self.advanced_query['match']=='all' else '任一'
+        self.search_scope.setText((f'高级条件：{count} 条，满足{mode}。' if count else '未应用高级条件。')+('修改尚未保存。' if self._saved_query_changed else '')+' 与快速搜索、当前集合及标签筛选相交；保存搜索只记录高级规则。')
+
+    def refresh_saved_searches(self):
+        identifier=self.saved_searches.currentData();self.saved_searches.blockSignals(True);self.saved_searches.clear();self.saved_searches.addItem('未选择保存搜索',None)
+        for row in self.service.list_saved_searches():self.saved_searches.addItem(row['name'],row['id'])
+        index=self.saved_searches.findData(identifier);self.saved_searches.setCurrentIndex(max(0,index));self.saved_searches.blockSignals(False);self.update_search_controls()
+
+    def select_saved_search(self,*args):
+        identifier=self.saved_searches.currentData();row=next((row for row in self.service.list_saved_searches() if row['id']==identifier),None)
+        self.advanced_query=deepcopy(row['query']) if row else {'match':'all','conditions':[]};self._saved_query_changed=False;self.update_search_controls();self.filter_docs()
+
+    def edit_search(self):
+        dialog=SearchDialog(deepcopy(self.advanced_query),self)
+        if dialog.exec()!=QDialog.DialogCode.Accepted:return
+        query=dialog.query()
+        if self.guard(lambda:self.service.search_documents(query=query if query['conditions'] else None)) is None:return
+        self.advanced_query=query;self._saved_query_changed=self.saved_searches.currentData() is not None;self.update_search_controls();self.filter_docs()
+
+    def save_new_search(self):
+        name,ok=QInputDialog.getText(self,'保存搜索','搜索名称')
+        if not ok:return
+        row=self.guard(lambda:self.service.save_saved_search(name,deepcopy(self.advanced_query)))
+        if row is not None:
+            self.refresh_saved_searches();self.saved_searches.setCurrentIndex(self.saved_searches.findData(row['id']));self._saved_query_changed=False;self.update_search_controls()
+
+    def update_saved_search(self):
+        identifier=self.saved_searches.currentData()
+        if identifier is None:return
+        name,ok=QInputDialog.getText(self,'更新保存搜索','搜索名称',text=self.saved_searches.currentText())
+        if not ok:return
+        row=self.guard(lambda:self.service.save_saved_search(name,deepcopy(self.advanced_query),search_id=identifier))
+        if row is not None:self._saved_query_changed=False;self.refresh_saved_searches();self.filter_docs()
+
+    def delete_saved_search(self):
+        identifier=self.saved_searches.currentData()
+        if identifier is None:return
+        if QMessageBox.question(self,'删除保存搜索','删除该搜索规则？文献与附件会保留。')!=QMessageBox.StandardButton.Yes:return
+        def remove():self.service.delete_saved_search(identifier);return True
+        if self.guard(remove):self.refresh_saved_searches();self.select_saved_search()
+
 
     def import_pdf(self):
         if self.io_worker is not None:return
