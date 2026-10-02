@@ -69,6 +69,10 @@ Python / PySide6 原型，使用合成测试 PDF。
 
 ![原生文献附件](design/screenshots/attachments-python.png)
 
+![原生书目信息](design/screenshots/metadata-python.png)
+
+![作者与编者](design/screenshots/creators-python.png)
+
 ![原生证据摘要与笔记](design/screenshots/evidence-python.png)
 
 </details>
