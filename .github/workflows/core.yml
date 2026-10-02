@@ -48,6 +48,10 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/smoke_managed_io.py
+      - name: Check offline import validation entrypoint from source
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m polyscholar --smoke-test-imports
       - name: Check actual local PDF extraction and native evidence workflow
         env:
           QT_QPA_PLATFORM: offscreen

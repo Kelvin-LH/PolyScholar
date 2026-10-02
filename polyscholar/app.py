@@ -105,6 +105,17 @@ def main():
     # Installed GUI entrypoints must dispatch frozen workers before creating the desktop.
     from multiprocessing import freeze_support
     freeze_support()
+    # Maintainer checks use generated files before opening any desktop or user library.
+    # 维护者检查先使用自生成文件，不打开桌面或用户文献库。
+    if '--smoke-test-imports' in sys.argv:
+        from .packaged_checks import run_local_import_checks
+        try:
+            run_local_import_checks()
+        except Exception as error:
+            print('PolyScholar local import checks failed: ' + type(error).__name__,
+                  file=sys.stderr, flush=True)
+            return 1
+        return 0
     from .service import LocalService
     app=QApplication(sys.argv);app.setStyleSheet(STYLE)
     if '--smoke-test' in sys.argv:
