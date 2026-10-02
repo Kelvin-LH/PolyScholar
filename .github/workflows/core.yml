@@ -80,3 +80,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/smoke_citation_import.py
+      - name: Check local Zotero snapshot preview and selected migration
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_zotero_migration.py

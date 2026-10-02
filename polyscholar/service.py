@@ -16,6 +16,7 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 from .store import LocalStore
 from .metadata import exchange_metadata
 from .citation_import import CitationImporter
+from .zotero_migration import ZoteroMigrationImporter
 from .summary_model import selected_blocks, request_summary
 from integrations.engines import VERSIONS, limited_environment
 
@@ -66,6 +67,7 @@ class LocalService:
         self._closed = False
         self._subscribers = []
         self._citation_importer = CitationImporter()
+        self._zotero_importer = ZoteroMigrationImporter(self.store.root)
 
     def subscribe_jobs(self, callback):
         with self._lock:
@@ -115,6 +117,34 @@ class LocalService:
 
     def list_documents(self):
         return self.store.list_root_documents()
+
+    def preview_zotero_migration(self, directory):
+        return self._zotero_importer.preview(directory)
+
+    def cancel_zotero_migration(self):
+        self._zotero_importer.cancel()
+
+    def import_zotero_preview(self, preview, selected_ids=None):
+        state, selected = self._zotero_importer.selected(preview, selected_ids)
+        with self._lock:
+            if self._closed:
+                raise ValueError('应用正在关闭，未导入任何条目。')
+            result = self.store.import_zotero_state(
+                state, selected, self._zotero_importer._cancelled,
+                self._zotero_importer.validate_state,
+            )
+            self._zotero_importer.consumed(preview)
+            return result
+
+    def export_zotero_resource(self, receipt_id, source_id, destination):
+        with self._lock:
+            return self.store.export_zotero_resource(receipt_id, source_id, destination)
+
+    def list_zotero_migrations(self):
+        return self.store.list_zotero_migrations()
+
+    def read_zotero_migration(self, receipt_id):
+        return self.store.read_zotero_migration(receipt_id)
 
     def preview_metadata_import(self, path, format):
         return self._citation_importer.preview(path, format)
@@ -630,6 +660,7 @@ class LocalService:
         return exchange_metadata(document, format)
 
     def close(self):
+        self._zotero_importer.close()
         self._citation_importer.close()
         with self._lock:
             self._closed = True

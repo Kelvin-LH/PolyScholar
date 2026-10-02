@@ -24,3 +24,8 @@
 无文件增量提取 BibliographicPolicy，统一真实 PDF 能力与创建/修改元数据校验。AttachmentLibrary 管理主要文件归属，页面只使用服务给出的真实 ID；新建书目对话框复用 ManagedIODialog，作者和出版字段继续使用既有编辑器。迁移、隐藏主要文件、永久删除选择和无文件合并关系的关键原因提供双语注释。旧页面密集单行与全仓注释复核仍未完成。
 
 引文导入由CitationImportPolicy共享输入/日期/元数据限制、CitationImporter管理转换/可信预览/进程，存储层复用单条与批量新书目构造/插入。BibTeX语法仍由固定成熟解析器承担，StrictBibTexParser只约束重复字段归并并校验兼容性，不另写一套语法。UI复用ManagedIODialog与完整作者展示，Python启动及冻结入口分流spawn；不把纯文本格式转换、IO监督和SQL事务混在页面中。预算、关闭、损失和安全拒绝的关键原因补充中英文说明。
+
+
+## Zotero 迁移与导入导出入口
+
+新增 SnapshotReader/Planner/Importer/PdfValidator/Library 分离来源只读复制、纯字段适配、可信预览生命周期、隔离PDF校验和本地事务。Native ImportExportDialog复用现有业务；ZoteroMigrationDialog分页核对并通过ManagedIODialog管理共享IO，不在界面重做元数据规则。未适配字段和批注原始档案不转换成已验证证据；注释记录路径、取消、WAL和事务不变量并保持中英说明。191项全套及原生新旧流程通过，完整文件模块进一步拆分、真实资料库及安装验收仍待执行。

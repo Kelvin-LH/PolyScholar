@@ -22,8 +22,9 @@ from .fulltext import FulltextLibrary, FULLTEXT_SCHEMA, index_current_ir
 from .trash import TrashLibrary, TRASH_SCHEMA
 from .duplicates import DuplicateLibrary, MERGE_SCHEMA
 from .bibliographic import BibliographicPolicy
+from .zotero_migration import ZoteroMigrationLibrary, MIGRATION_SCHEMA
 
-AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt','document_trashed','document_restored','purge_cleanup','documents_merged','bibliographic_created','primary_pdf_changed','citation_imported'})
+AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt','document_trashed','document_restored','purge_cleanup','documents_merged','bibliographic_created','primary_pdf_changed','citation_imported','zotero_migrated'})
 
 MAX_PDF = 100 * 1024 * 1024
 SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeldoc',
@@ -32,7 +33,7 @@ SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeld
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
 
-class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLibrary, AttachmentLibrary):
+class LocalStore(ZoteroMigrationLibrary, DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLibrary, AttachmentLibrary):
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -55,7 +56,7 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
         self.objects.mkdir(exist_ok=True)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version > 11:
+            if version > 12:
                 raise ValueError('本地数据库来自更新版本，请升级应用。')
             if version == 1:
                 backup = self.root / 'library-before-v2.sqlite3'
@@ -157,6 +158,16 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
                         target.close()
                     if os.name == 'posix':
                         backup.chmod(0o600)
+            if version in range(1, 12):
+                backup = self.root / 'library-before-v12.sqlite3'
+                if not backup.exists():
+                    target = sqlite3.connect(backup)
+                    try:
+                        db.backup(target)
+                    finally:
+                        target.close()
+                    if os.name == 'posix':
+                        backup.chmod(0o600)
             db.execute('PRAGMA journal_mode=WAL')
             db.execute('PRAGMA foreign_keys=OFF')
             db.execute('PRAGMA legacy_alter_table=ON')
@@ -176,7 +187,7 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
                     PRIMARY KEY(document_id,collection_id));
                 CREATE INDEX IF NOT EXISTS desktop_memberships_collection ON desktop_memberships(collection_id);
             '''
-            db.executescript('BEGIN IMMEDIATE;\n' + foundation + migration + '\n' + IR_SCHEMA + '\n' + ATTACHMENT_SCHEMA + '\n' + SEARCH_SCHEMA + '\n' + FULLTEXT_SCHEMA + '\n' + TRASH_SCHEMA + '\n' + MERGE_SCHEMA)
+            db.executescript('BEGIN IMMEDIATE;\n' + foundation + migration + '\n' + IR_SCHEMA + '\n' + ATTACHMENT_SCHEMA + '\n' + SEARCH_SCHEMA + '\n' + FULLTEXT_SCHEMA + '\n' + TRASH_SCHEMA + '\n' + MERGE_SCHEMA + '\n' + MIGRATION_SCHEMA)
             if version < 8:
                 for row in db.execute('SELECT document_id FROM desktop_ir_current').fetchall():
                     index_current_ir(db, row[0])
@@ -188,7 +199,7 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
                            "BEGIN SELECT RAISE(ABORT, 'Invalid audit event'); END")
             if db.execute('PRAGMA foreign_key_check').fetchone():
                 raise ValueError('本地资料关系校验失败，升级未提交。')
-            db.execute('PRAGMA user_version=11')
+            db.execute('PRAGMA user_version=12')
             db.commit()
             db.execute('PRAGMA foreign_keys=ON')
             db.execute('PRAGMA legacy_alter_table=OFF')
@@ -277,7 +288,18 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
                     db.execute('BEGIN IMMEDIATE')
                     if parent_id is not None:
                         self._require_root(db, parent_id)
-                    row = db.execute('SELECT data FROM desktop_documents WHERE sha256=?', (digest,)).fetchone()
+                    rows = db.execute('SELECT data FROM desktop_documents WHERE sha256=?', (digest,)).fetchall()
+                    if len(rows) > 1:
+                        # Migration preserves distinct source attachments sharing immutable bytes.
+                        # 迁移可保留共享字节的独立附件；普通导入不得随意挑选其归属。
+                        if parent_id is not None:
+                            rows = [row for row in rows if db.execute(
+                                'SELECT 1 FROM desktop_attachment_links WHERE parent_document_id=? AND child_document_id=?',
+                                (parent_id, json.loads(row[0])['id']),
+                            ).fetchone()]
+                        if len(rows) != 1:
+                            raise ValueError('此 PDF 对应多个独立附件，请在已有文献下明确选择，不能自动判定归属。')
+                    row = rows[0] if rows else None
                     if row:
                         existing = json.loads(row[0])
                         self.require_active(existing['id'], db)
@@ -548,13 +570,14 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
         with self.connection() as db:
             pending_roots = [Path(entry['path']) for row in db.execute('SELECT paths FROM desktop_purge_cleanup')
                              for entry in json.loads(row[0])]
+            zotero_roots = [Path(json.loads(row[0])['sourceDirectory']) for row in db.execute('SELECT receipt FROM desktop_zotero_migrations')]
         documents=self.list_documents()
         originals=[path for document in documents for path in document.get('sourcePaths',[])]
         protected=[*self.objects.glob('*.pdf'), *self.root.glob('*.sqlite3*')]
         for job in self.list_jobs():
             protected.extend(self.output_path(job).glob('*.pdf'))
         return atomic_export(destination,data,
-            protected_roots=[self.root,*extra_protected,*pending_roots,*[self.output_path(job) for job in self.list_jobs()]],
+            protected_roots=[self.root,*extra_protected,*pending_roots,*zotero_roots,*[self.output_path(job) for job in self.list_jobs()]],
             protected_files=protected, original_paths=originals,original_hashes={document['sha256'] for document in documents if BibliographicPolicy.is_pdf(document)})
 
     def export_translation(self, job_id, artifact_index, destination):

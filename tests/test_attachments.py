@@ -154,7 +154,7 @@ class AttachmentTests(unittest.TestCase):
         self.assertEqual(store.list_root_documents()[0]['id'],parent_id)
         self.assertEqual(store.read_pdf(parent_id),self.original.read_bytes())
         with store.connection() as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],11)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],12)
         with closing(sqlite3.connect(self.root/'data/library-before-v6.sqlite3')) as db:
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],5)
             self.assertEqual(db.execute('SELECT id FROM desktop_documents').fetchone()[0],parent_id)

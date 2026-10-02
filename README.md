@@ -26,7 +26,8 @@
 - **双语阅读**：原文与译文并排显示，在桌面内完成阅读。
 - **证据摘要**：勾选原文生成结构化模型摘要，保留引用与手写笔记，可跳转原文并提示旧引用失效。
 - **自选模型**：支持 DeepSeek 等兼容 API，自动获取可用模型，也可手动填写。
-- **引文交换**：预览并导入 BibTeX、RIS、CSL-JSON，导出选中书目及译文 PDF。
+- **导入与导出**：统一入口导入 PDF、Zotero、BibTeX、RIS 和 CSL-JSON；导出选中书目、译文 PDF 与迁移档案文件。
+- **Zotero 迁移**：选择本机资料目录，预览并迁移书目、集合与受管附件；未适配的字段、笔记和批注保留为本地档案。[迁移范围 →](docs/16-zotero-migration.md)
 - **个人桌面**：Python + PySide6 + SQLite，无需服务器或账户。发行包自带 Python，缓存目录可调整。
 
 文献与笔记保存在本机。联网用于模型 API、DOI 元数据查询及模型/字体下载；翻译时会向模型 API 发送论文内容。[数据边界 →](docs/09-local-and-network-scope.md)
@@ -62,6 +63,14 @@
 <summary>查看当前原生界面截图</summary>
 
 Python / PySide6 原型，使用合成测试 PDF。
+
+**导入与导出**
+
+![导入导出原生界面](design/screenshots/import-export-python.png)
+
+**Zotero 迁移预览**
+
+![Zotero 迁移原生界面](design/screenshots/zotero-migration-python.png)
 
 ![原生文献库](design/screenshots/library-python.png)
 

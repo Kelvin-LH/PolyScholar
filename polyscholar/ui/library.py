@@ -9,6 +9,8 @@ from .trash import TrashDialog, TrashMoveOperation
 from .duplicates import DuplicatesDialog
 from .bibliographic import BibliographicDialog
 from .citation_import import CitationImportDialog
+from .zotero_migration import ZoteroMigrationDialog
+from .import_export import ImportExportDialog
 from copy import deepcopy
 from ..metadata import APPLICABLE, legacy_creators, creator_display
 
@@ -40,8 +42,8 @@ class LibraryPage:
         ol.addWidget(self.trash_button)
         self.duplicates_button = self.button('重复候选 / 合并',self.open_duplicates)
         ol.addWidget(self.duplicates_button)
-        self.citation_import_button = self.button('导入引文',self.open_citation_import)
-        ol.addWidget(self.citation_import_button)
+        self.import_export_button = self.button('导入与导出', self.open_import_export)
+        ol.addWidget(self.import_export_button)
         split.addWidget(organize)
         self.document_list=QListWidget();self.document_list.setMinimumWidth(160);self.document_list.currentRowChanged.connect(self.select_doc);split.addWidget(self.document_list)
         inspector=QWidget();inspector.setMinimumWidth(280);f=QFormLayout(inspector);self.metadata_form=f;self.fields={};self._metadata_creators=[];self._authors_loaded=''
@@ -316,6 +318,18 @@ class LibraryPage:
         self.citation_import_dialog = CitationImportDialog(self,self.current_collection())
         self.citation_import_dialog.show()
 
+    def open_import_export(self):
+        if self.io_worker is not None or self._closing:
+            return
+        self.import_export_dialog = ImportExportDialog(self)
+        self.import_export_dialog.show()
+
+    def open_zotero_migration(self):
+        if self.io_worker is not None or self._closing:
+            return
+        self.zotero_migration_dialog = ZoteroMigrationDialog(self)
+        self.zotero_migration_dialog.show()
+
     def new_bibliographic(self):
         if self.io_worker is not None or self._closing:return
         self.bibliographic_dialog=BibliographicDialog(self,self.current_collection())
@@ -409,7 +423,7 @@ class LibraryPage:
         self.attachment_delete_button.setEnabled(bool(row and row['role']!='original') and not busy)
         self.primary_pdf_button.setEnabled(bool(row and not row.get('isPrimary')) and not busy)
         self.new_bibliographic_button.setEnabled(not busy)
-        self.citation_import_button.setEnabled(not busy)
+        self.import_export_button.setEnabled(not busy)
         self.update_read_controls()
 
     def add_attachment(self):
