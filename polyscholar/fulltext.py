@@ -1,10 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Current-IR local substring index. No PDF access, OCR or network activity."""
+"""Current-IR substring index. 当前 IR 的本地子串索引。
+
+Index operations do not open PDFs, run OCR or access the network.
+索引操作不读取 PDF、不运行 OCR、不联网。
+"""
 from datetime import datetime, timezone
 from contextlib import contextmanager
 import sqlite3
 import time
 import json
+from .validation import QUERY_TEXT_POLICY
 
 FULLTEXT_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS desktop_fulltext_blocks(
@@ -32,7 +37,10 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 def index_current_ir(db, document_id, parsed=False):
-    """Caller owns the transaction: replace index together with current source IR."""
+    """Caller owns the transaction: replace index atomically with current source IR.
+
+    调用者拥有事务：索引与当前原文 IR 原子替换，FTS 触发器同步随事务回滚。
+    """
     db.execute('DELETE FROM desktop_fulltext_blocks WHERE document_id=?', (document_id,))
     current = db.execute('SELECT revision_id FROM desktop_ir_current WHERE document_id=?', (document_id,)).fetchone()
     rows = db.execute('SELECT id,text FROM desktop_ir_blocks WHERE document_id=? AND revision_id=? ORDER BY rowid',
@@ -40,6 +48,8 @@ def index_current_ir(db, document_id, parsed=False):
     db.executemany('INSERT INTO desktop_fulltext_blocks(block_id,document_id,revision_id,folded) VALUES(?,?,?,?)',
                    [(block_id,document_id,current[0],text.casefold()) for block_id,text in rows if text.strip()])
     status = 'indexed' if any(text.strip() for _,text in rows) else 'no_text' if current else 'unparsed'
+    # Rebuilding an index is not a successful reparse; retain the real last error.
+    # 重建索引不等于重新解析成功；保留真实的最近解析失败状态。
     previous = db.execute('SELECT last_parse_status,last_error FROM desktop_fulltext_status WHERE document_id=?', (document_id,)).fetchone()
     parse_status, error = ('succeeded',None) if parsed else previous if previous else ('succeeded',None) if current else (None,None)
     db.execute('INSERT INTO desktop_fulltext_status VALUES(?,?,?,?,?) ON CONFLICT(document_id) DO UPDATE SET '
@@ -51,8 +61,8 @@ def _check_deadline(deadline):
         raise ValueError('本地全文查询超过 30 秒，请缩小筛选范围。')
 
 def _snippet(text, needle, deadline=None):
-    # Map casefold expansion back to original offsets (e.g. ß -> ss), preserving
-    # actual original text rather than using folded text as a fabricated quote.
+    # Map casefold expansion back to original offsets (e.g. ß -> ss).
+    # 将 casefold 扩展映射回原文坐标（如 ß -> ss），保留真实原文摘录。
     offset = text.casefold().find(needle)
     start = end = 0
     folded_offset = 0
@@ -115,12 +125,11 @@ class FulltextLibrary:
         return dict(documentCount=len(identifiers))
 
     def search_fulltext(self,text,collection_id=None,unfiled=False,tags=None,include_descendants=False,query=None,limit=200,metadata_text=''):
-        if not isinstance(text,str) or len(text.encode('utf-8'))>4096 or any(ord(c)<32 or ord(c) in (127,133,8232,8233) for c in text):
-            raise ValueError('全文搜索值必须是最多 4 KiB 的单行文本。')
+        text = QUERY_TEXT_POLICY.validate(text, '全文搜索值必须是最多 4 KiB 的单行文本。')
         if type(limit) is not int or not 1<=limit<=1000:
             raise ValueError('全文搜索结果上限必须是 1–1000。')
         deadline=time.monotonic()+30
-        needle=text.strip().casefold()
+        needle = text.casefold()
         with self.lock:
             roots=self.search_documents(text=metadata_text,collection_id=collection_id,unfiled=unfiled,tags=tags,include_descendants=include_descendants,query=query)
             _check_deadline(deadline)

@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Validated local bibliographic records and portable metadata exchange."""
+"""Validated local bibliographic records and portable metadata exchange.
+
+校验本地书目记录，并生成可交换的元数据；不推断姓名或学位类型。
+Names and degree types are preserved without inference.
+"""
 from datetime import date as calendar_date
 import json
 import re
@@ -122,8 +126,8 @@ def exchange_metadata(document, format):
         return json.dumps([item], ensure_ascii=False, indent=2)
     if format == 'bibtex':
         entry = {'article-journal':'article', 'paper-conference':'inproceedings', 'book':'book', 'thesis':'phdthesis'}[kind]
-        # Generic thesis records do not assert a doctorate: BibTeX @misc carries
-        # a thesis type while CSL/RIS retain the dedicated thesis classification.
+        # Generic theses do not assert a doctorate; BibTeX uses @misc + type.
+        # 普通学位论文不推断博士学位；BibTeX 用 @misc + type，CSL/RIS 保留论文类型。
         if kind == 'thesis':
             entry = 'misc'
         values = [('title', _bib(doc['title']))]

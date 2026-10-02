@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Local metadata conditions and dynamic saved searches, without full-text indexing."""
+"""Local metadata rules and dynamic saved searches. 本地元数据规则与动态保存搜索。
+
+Conditions match metadata only; full-text indexing lives in fulltext.py.
+条件仅匹配元数据；全文索引由 fulltext.py 负责。
+"""
 from datetime import datetime, timezone
 import json
 import re
 import uuid
 from .metadata import normalize_metadata, creator_display
 from .library import clean_name
+from .validation import QUERY_TEXT_POLICY
 
 SEARCH_FIELDS = ('title', 'creator', 'doi', 'year', 'itemType', 'publicationTitle', 'publisher', 'isbn', 'tag', 'notes')
 TEXT_OPERATORS = ('contains', 'not_contains', 'is', 'is_not', 'is_empty', 'is_not_empty')
@@ -26,9 +31,7 @@ def validate_query(query):
         field, operator, value = (condition[k] for k in ('field', 'operator', 'value'))
         if field not in SEARCH_FIELDS or operator not in TEXT_OPERATORS + (('before', 'after') if field == 'year' else ()):
             raise ValueError('搜索字段或操作无效。')
-        if not isinstance(value, str) or len(value.encode('utf-8')) > 4096 or any(ord(char) < 32 or ord(char) in (127, 133, 8232, 8233) for char in value):
-            raise ValueError('每个搜索值必须是最多 4 KiB 的文本。')
-        value = value.strip()
+        value = QUERY_TEXT_POLICY.validate(value, '每个搜索值必须是最多 4 KiB 的文本。')
         if operator in ('is_empty', 'is_not_empty'):
             if value:
                 raise ValueError('空值条件不能填写搜索值。')
@@ -59,6 +62,8 @@ def matches_query(document, query):
             result = any(value < int(needle) if operator == 'before' else value > int(needle) for value in numeric)
         else:
             positive = any(needle in value if operator in ('contains', 'not_contains') else needle == value for value in values)
+            # A negative creator/tag rule must reject every matching value.
+            # 作者/标签否定条件要求所有独立值均不匹配，不能因另一值不匹配而通过。
             result = not positive if operator in ('not_contains', 'is_not') else positive
         outcomes.append(result)
     return all(outcomes) if query['match'] == 'all' else any(outcomes)
