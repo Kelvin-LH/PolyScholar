@@ -89,24 +89,6 @@ python -m polyscholar
 3. 选择引擎与页范围，创建翻译任务。
 4. 阅读或导出翻译结果。
 
-## 开发路线
-
-- [x] Python 原生桌面与本地 SQLite 文献库
-- [x] PDF 导入、去重、元数据与笔记
-- [x] 模型配置与模型列表获取
-- [x] 双引擎任务适配、译文导出与缓存目录
-- [x] 集合与子集合、多集合归类、标签联合筛选
-- [ ] 多附件、高级检索与回收站
-- [ ] 带原文定位的证据摘要
-- [ ] 图中文字注释与段落对齐
-- [ ] CSL 引文样式排版
-- [ ] Windows / macOS / Linux 正式安装包
-
-macOS arm64 开发包已通过启动检查。真实 API 翻译与三平台安装待验收。[验证记录 →](docs/07-validation.md)
-
-## 文档
-
-[产品需求](docs/02-requirements.md) · [架构设计](docs/03-architecture.md) · [翻译与 AI](docs/04-document-and-llm.md) · [界面规范](docs/10-ui-spec.md) · [研发计划](docs/11-development-plan.md) · [Zotero 对标](docs/12-zotero-parity.md) · [自查整改](docs/14-review-remediation.md)
 
 ## 参与贡献
 
@@ -120,8 +102,6 @@ python -m unittest discover -s tests -v
 安全问题请参阅 [SECURITY.md](SECURITY.md)。
 
 ## 致谢与许可
-
-感谢 [BabelDOC](https://github.com/funstory-ai/BabelDOC)、[PDFMathTranslate](https://github.com/PDFMathTranslate/PDFMathTranslate) 与 [Qt for Python](https://doc.qt.io/qtforpython-6/) 提供基础能力。
 
 [AGPL-3.0-only](LICENSE) · 允许商业使用，遵守适用的源码公开与通知义务。
 
