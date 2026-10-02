@@ -15,16 +15,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests'))
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox
-from polyscholar.app import Window, STYLE
-from polyscholar.service import LocalService
-from polyscholar.zotero_migration import ZoteroMigrationPolicy
-from test_zotero_migration import fixture
 
 
 def wait(predicate, timeout=20):
+    from PySide6.QtTest import QTest
+
     deadline = time.monotonic() + timeout
     while not predicate() and time.monotonic() < deadline:
         QTest.qWait(10)
@@ -32,6 +27,8 @@ def wait(predicate, timeout=20):
 
 
 def idle(window, dialog):
+    from polyscholar.zotero_migration import ZoteroMigrationPolicy
+
     # 后端预算30秒；观察期限覆盖进程回收及Qt排队，不能先于业务预算失败。
     # Observe the full domain budget plus process cleanup and queued Qt completion.
     try:
@@ -64,6 +61,15 @@ def idle(window, dialog):
 
 
 def main():
+    # spawn 会重新载入入口；只有 GUI 主进程需要这些模块。
+    # Parser children reload this entrypoint but must not import the Qt application.
+    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from polyscholar.app import Window, STYLE
+    from polyscholar.service import LocalService
+    from test_zotero_migration import fixture
+
     callback_errors = []
     original_hook = sys.excepthook
     def record_callback_error(kind, value, traceback):
@@ -224,4 +230,6 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    from migration_probe import MigrationTimingProbe
+    with MigrationTimingProbe():
+        main()
