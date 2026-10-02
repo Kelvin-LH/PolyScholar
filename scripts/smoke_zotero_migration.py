@@ -13,23 +13,27 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests'))
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from polyscholar.app import Window, STYLE
 from polyscholar.service import LocalService
+from polyscholar.zotero_migration import ZoteroMigrationPolicy
 from test_zotero_migration import fixture
 
 
-def wait(predicate):
-    deadline = time.monotonic() + 20
+def wait(predicate, timeout=20):
+    deadline = time.monotonic() + timeout
     while not predicate() and time.monotonic() < deadline:
         QTest.qWait(10)
     assert predicate(), 'Zotero migration UI did not settle'
 
 
 def idle(window, dialog):
-    wait(lambda: window.io_worker is None and not dialog._busy and dialog._pending_action is None)
+    # 后端预算30秒；观察期限覆盖进程回收及Qt排队，不能先于业务预算失败。
+    # Observe the full domain budget plus process cleanup and queued Qt completion.
+    wait(lambda: window.io_worker is None and not dialog._busy and dialog._pending_action is None,
+         timeout=ZoteroMigrationPolicy.timeout_seconds + 10)
 
 
 def main():
@@ -41,6 +45,17 @@ def main():
     sys.excepthook = record_callback_error
     app = QApplication([])
     app.setStyleSheet(STYLE)
+    unexpected_warnings=[]
+    def reject_unexpected_warnings():
+        # 无人值守检查必须暴露失败，不让模态警告永久占住测试事件循环。
+        # Surface failures in unattended checks instead of blocking forever in a modal warning.
+        for widget in app.topLevelWidgets():
+            if isinstance(widget, QMessageBox) and widget.isVisible():
+                unexpected_warnings.append(widget.text())
+                widget.reject()
+    warning_timer=QTimer(app)
+    warning_timer.timeout.connect(reject_unexpected_warnings)
+    warning_timer.start(25)
     with tempfile.TemporaryDirectory(prefix='polyscholar-zotero-ui-') as directory:
         root = Path(directory).resolve()
         source = root / 'synthetic-zotero'
@@ -176,6 +191,7 @@ def main():
             app.processEvents()
             service.close()
     assert not callback_errors, f'Qt callbacks failed: {callback_errors}'
+    assert not unexpected_warnings, f'Unexpected native warning: {unexpected_warnings}'
     sys.excepthook = original_hook
     print('Synthetic Zotero migration native regression passed')
 

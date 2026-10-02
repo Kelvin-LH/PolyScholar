@@ -20,6 +20,16 @@
 
 源码 `b3cf329` 的 [CI 37003196865](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37003196865) 已确认六项全部成功，Windows/macOS/Linux core与native-gui实际完成，包含新引文流程及spawn解析。该证据不替代真实冻结安装包或Zotero应用生成资料库的迁移验收。
 
+## 迁移增量三平台 CI 时序复核
+
+源码 `a8c5cd2` 的 [CI 37011876844](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37011876844) 首轮三项通过（Linux core/native、Windows core），三项失败：macOS core 的0.5秒超时测试未生成进入挂起目标的marker；macOS/Windows native均在初次预览idle20秒到期。Windows core实际通过迁移资源及进程崩溃恢复，但不等同Windows ACL或安装验收。
+
+启动阶段耗尽预算也会被正确终止，旧测试却要求一定进入目标。协调者以真实Process.start额外延迟0.65秒实际复现原marker断言失败；修后同条件通过。现分开验证真实启动阶段超时（没有marker）和已进入真实挂起目标的超时（marker后父进程局部受控时钟推进）；后者含真实15秒启动观察上限，不能当作真实0.5秒挂起耗时。取消/关闭也保留启动观察上限、finally回收，并核对实际Process已退出及exitcode，不只检查registry为空。生产10秒校验与30秒预览预算均未改变。
+
+界面检查观察期调整为域预算30秒加回收/Qt排队余量，仍等待真实worker释放并验证预览、选中迁移、PDF身份及分别导出。受控启动额外延迟7秒三次的本机尝试实际触发域超时；进程栈证据表明Qt模态warning占住无人测试事件循环，隔离合成检查进程随后明确结束，不记录为成功。smoke现捕捉意外warning、关闭后保留硬失败，避免无限停住，不修改产品的警告交互。正常本机原生流程已通过；额外延迟真实Process.start五秒三次的独立完整原生流程通过，保留所有预览/迁移/字节导出断言，并无意外警告。此合成慢启动对照不是实际翻译引擎或安装验收。
+
+本机209项全量通过（25.059秒）；冷启动fixture等待加长后10项相关再次通过（1.443秒），原生正常流程通过。基线及diff检查通过。修正后源码CI待推送与实测，不把首次三项成功说成全部通过；真实引擎/API、Windows ACL/凭据清理和三平台安装门槛继续开放。
+
 ## 链接附件、快照资源与迁移崩溃恢复增量
 
 2026-10-02：初始专项实际失败：链接目录关键字未接入（TypeError）、受管 HTML 伴随文件数量为0；真实子进程在发布后、SQL提交前退出可留下新 PDF 对象和暂存。新增 ZoteroResourcePlanner 复用只读 IO/隔离 PDF 校验，MigrationRecoverySession 统一有界日志、发布和恢复。

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Synthetic source snapshots and failure paths / 合成来源快照及失败路径。"""
 from contextlib import closing
+from types import SimpleNamespace
 from pathlib import Path
 import sqlite3
 import os
@@ -53,6 +54,13 @@ def hanging_pdf_validator(path, connection):
     time.sleep(30)
 
 
+def delayed_pdf_validator(path, connection):
+    # 模拟尚未进入校验目标的启动阶段；由真实父进程预算终止。
+    # Simulate bootstrap before validation; the real parent deadline terminates it.
+    time.sleep(30)
+    hanging_pdf_validator(path, connection)
+
+
 def fifo_reader_probe(path, replace_before_open, connection):
     path=Path(path)
     reader=ZoteroSnapshotReader(path.parent,threading.Event(),ZoteroMigrationPolicy())
@@ -74,20 +82,45 @@ def fifo_reader_probe(path, replace_before_open, connection):
 
 
 class ZoteroPdfValidatorTests(unittest.TestCase):
+    @staticmethod
+    def track_stopped_workers(validator):
+        stopped=[]
+        real_stop=validator._stop
+        def stop(worker):
+            real_stop(worker)
+            stopped.append(worker)
+        validator._stop=stop
+        return stopped
+
+    def assert_workers_exited(self, workers):
+        self.assertTrue(workers)
+        for worker in workers:
+            self.assertFalse(worker.is_alive())
+            self.assertIsNotNone(worker.exitcode)
+
     def test_actual_spawn_timeout_and_cancel_reclaim_children(self):
         with tempfile.TemporaryDirectory() as temporary:
             path=Path(temporary)/'input.pdf'
             path.write_bytes(b'not parsed by synthetic hanging validator')
             validator=ZoteroPdfValidator()
+            stopped=self.track_stopped_workers(validator)
             validator._worker_target=hanging_pdf_validator
             validator.timeout_seconds=0.5
             start=time.monotonic()
-            valid,code=validator.validate(path,threading.Event(),time.monotonic()+5)
+            startup_deadline=start+15
+            marker=Path(str(path)+'.started')
+            # 先确认真实子进程已进入挂起路径，再用受控时钟耗尽校验预算。
+            # Exhaust the controlled deadline only after the real child reaches its hanging target.
+            def validation_clock():
+                return 1.0 if marker.exists() or time.monotonic() >= startup_deadline else 0.0
+            with patch('polyscholar.zotero_migration.time', SimpleNamespace(monotonic=validation_clock)):
+                valid,code=validator.validate(path,threading.Event(),1.0)
             self.assertFalse(valid)
             self.assertEqual(code,'pdf-validation-timeout')
-            self.assertLess(time.monotonic()-start,3)
+            self.assertLess(time.monotonic()-start,18)
             self.assertTrue(Path(str(path)+'.started').exists())
             self.assertEqual(validator._workers,set())
+            self.assert_workers_exited(stopped)
             Path(str(path)+'.started').unlink()
             validator.timeout_seconds=20
             cancelled=threading.Event()
@@ -97,16 +130,35 @@ class ZoteroPdfValidatorTests(unittest.TestCase):
                 except ValueError as error: errors.append(str(error))
             thread=threading.Thread(target=run)
             thread.start()
-            deadline=time.monotonic()+3
-            while not Path(str(path)+'.started').exists() and time.monotonic()<deadline:
-                time.sleep(0.02)
-            self.assertTrue(Path(str(path)+'.started').exists())
-            cancelled.set()
-            thread.join(3)
+            deadline=time.monotonic()+15
+            try:
+                while not Path(str(path)+'.started').exists() and time.monotonic()<deadline:
+                    time.sleep(0.02)
+                self.assertTrue(Path(str(path)+'.started').exists())
+            finally:
+                cancelled.set()
+                thread.join(3)
+                validator.close()
             self.assertFalse(thread.is_alive())
             self.assertTrue(errors)
             self.assertEqual(validator._workers,set())
+            self.assert_workers_exited(stopped)
             validator.close()
+
+    def test_real_deadline_includes_process_startup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'input.pdf'
+            path.write_bytes(b'synthetic cold-start input')
+            validator=ZoteroPdfValidator()
+            stopped=self.track_stopped_workers(validator)
+            validator._worker_target=delayed_pdf_validator
+            validator.timeout_seconds=0.1
+            valid,code=validator.validate(path,threading.Event(),time.monotonic()+5)
+            self.assertFalse(valid)
+            self.assertEqual(code,'pdf-validation-timeout')
+            self.assertFalse(Path(str(path)+'.started').exists())
+            self.assertEqual(validator._workers,set())
+            self.assert_workers_exited(stopped)
 
     @unittest.skipUnless(hasattr(os,'mkfifo'),'POSIX FIFO vector')
     def test_unattended_fifo_and_regular_to_fifo_race_do_not_block_open(self):
@@ -135,19 +187,25 @@ class ZoteroPdfValidatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path=Path(temporary)/'input.pdf'; path.write_bytes(b'fixture')
             validator=ZoteroPdfValidator(); validator._worker_target=hanging_pdf_validator
+            stopped=self.track_stopped_workers(validator)
+            validator.timeout_seconds=20
             errors=[]
             def run():
                 try: validator.validate(path,threading.Event(),time.monotonic()+20)
                 except ValueError as error: errors.append(str(error))
             thread=threading.Thread(target=run); thread.start()
-            deadline=time.monotonic()+3
-            while not Path(str(path)+'.started').exists() and time.monotonic()<deadline:
-                time.sleep(0.02)
-            self.assertTrue(Path(str(path)+'.started').exists())
-            validator.close(); thread.join(3)
+            deadline=time.monotonic()+15
+            try:
+                while not Path(str(path)+'.started').exists() and time.monotonic()<deadline:
+                    time.sleep(0.02)
+                self.assertTrue(Path(str(path)+'.started').exists())
+            finally:
+                validator.close()
+                thread.join(3)
             self.assertFalse(thread.is_alive())
             self.assertTrue(errors)
             self.assertEqual(validator._workers,set())
+            self.assert_workers_exited(stopped)
 
 
 class ZoteroMigrationTests(unittest.TestCase):
