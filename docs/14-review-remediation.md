@@ -18,6 +18,10 @@
 
 源码 `f0d62a2` 的 [首轮 CI 37068148940](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37068148940) 中 Windows core 实际运行223项（7项其他平台向量跳过），唯一失败为嵌套 Job 测试在终止后立即断言 `middle.poll()` 非空；其他7项 Windows 新增专项实际成功。改为在5秒内 `middle.wait()` 确认真实退出并核对终止退出码，同时保留叶进程真实 HANDLE 的有界退出验证。微软说明 [TerminateProcess 对其他进程的终止为异步](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess)，该修改保留实际退出门槛，不把活动计数归零当作句柄瞬时就绪。生产 `WindowsProcess.stop()` 原已包含 Job 查询后的进程等待；重跑 Windows 结果待确认。
 
+修正源码 `588ff0d` 的 [CI 37068748285](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37068748285) Windows core 已成功：223项，125.179秒，7项按其他平台跳过。协调者实际读取 job111042881710 的最终日志，确认8项 Windows 专项均为 ok，包含嵌套 Job、拥有者/sidecar 真实 `os._exit`、父先退出后的叶进程回收、拒绝绑定不启动、二进制 stdin 与 Unicode 参数、显式发行资源路径。该证据只关闭这些合成进程边界，不证明真实上游引擎、完整冻结应用翻译或凭据崩溃恢复；后两者继续开放。
+
+重跑最终为五项成功、一项失败：三平台 core、Windows/Linux native-gui 成功；macOS native-gui 在最后的 Zotero 迁移预览失败（job111042881792）。日志明确为 `smoke_zotero_migration.py:116`、`dialog._preview is not None` 断言失败，界面实际返回“Zotero 预览超过处理时限，请缩小资料范围。”；这是30秒业务预算触发，不是 UI idle 未释放，也未复现本轮 Windows Job 问题。当前源码同一原生迁移脚本在本机独立重新执行成功；不能据此称 CI 超时已修复或认定执行机慢。下一轮需定位迁移复制/读取/隔离 PDF 校验的阶段耗时，不增大生产时限，不凭重跑覆盖失败。首轮 `f0d62a2` 三平台 native-gui 全部成功作为历史对照保留，新提交整轮状态仍为 failure。
+
 ## 本地引文导入复核
 
 本轮基线 `e622af9` 的 [CI 36967647723](https://github.com/Kelvin-LH/PolyScholar/actions/runs/36967647723) 已确认六项成功。此前没有引文导入接口/原生入口；新增BibTeX、RIS、CSL-JSON显式格式与选条目导入，四类型、字段/作者顺序、日期及损失警告共用既有书目规则。成熟纯Python解析依赖固定，完整第三方许可已保留；无文件关系不生成附件或下载源URL。
