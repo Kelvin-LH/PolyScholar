@@ -6,6 +6,8 @@
 
 ## 冻结导入流程补验（2026-10-03）
 
+后续源码 `d83c4c0` 的 [三平台专用冻结 CI 37023285205](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37023285205) 已全部成功：Windows AMD64/Linux x86_64/macOS arm64 各自重建运行时及冻结包，执行实际 GUI 启动、PDF/三格式引文/子进程/持久化和整包中文路径迁移检查；迁移前缀内两引擎版本及 pip check 成功。协调者核对 job/step conclusion 和各 JSON 验收字段，sourceCommit 一致。该证据关闭这些冻结组件检查；干净系统安装、完整迁移 GUI、真实 Zotero 内容、真实模型/翻译、Windows ACL/凭据清理及签名公证等仍未验收。CI 没有上传包或发布下载。
+
 源码 `a7218fc` 的 macOS arm64 包实际完成 PDF 导入/包内 Python 文本提取、三格式引文 spawn 解析及导入、独立 spawn PDF 校验/损坏文件拒绝、重开库和子进程回收。整包移至含中文和空格的路径后，临时工作目录、仅 OS 目录 PATH 下执行相同冻结检查成功。维护者入口 `--smoke-test-imports` 仅使用自生成临时资料；打包脚本要求该检查与原生启动都成功后才记录相应 manifest 字段。
 
 本证据覆盖当前开发机上的冻结组件；完整迁移 GUI、真实 Zotero 内容、真实模型/全文翻译、干净系统安装及 Windows/Linux 冻结包尚未验收。开发包与合成证据保留在 `.tools/validation-a7218fc/`，未发布下载。三平台源码 CI 与剩余门槛见 [整改追踪](14-review-remediation.md)。

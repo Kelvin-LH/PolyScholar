@@ -20,13 +20,15 @@
 
 源码 `b3cf329` 的 [CI 37003196865](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37003196865) 已确认六项全部成功，Windows/macOS/Linux core与native-gui实际完成，包含新引文流程及spawn解析。该证据不替代真实冻结安装包或Zotero应用生成资料库的迁移验收。
 
-## 三平台专用冻结构建已启动（2026-10-03）
+## 三平台专用冻结构建已通过（2026-10-03）
 
 源码 `d83c4c0` 增加仅手动触发的 `.github/workflows/package-validation.yml`，Windows/Linux/macOS 分别从干净 checkout 下载哈希固定的独立 Python、安装隔离引擎、构建冻结包并执行实际包检查。权限只有 contents:read；不上传运行时、安装包或原始日志，只记录固定的合成验收摘要。所用官方 actions 已核对版本并固定到 commit。
 
 `scripts/check_package_relocation.py` 复用包内检查与运行时验证，在真正中文/空格前缀下验证后恢复原包位置；拒绝覆盖既有证据，只在完整成功后排他发布固定 JSON。团队及协调者分别对现有 macOS `a7218fc` 包实际执行成功，原生启动、冻结导入、两套嵌入引擎版本/pip check 及恢复均通过；证据拒绝覆盖也已验证。该检查不是新的 Windows/Linux 包证明。
 
-已实际 dispatch [Frozen desktop validation 37023285205](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37023285205)，head 为 `d83c4c0`，三平台均正在准备独立运行时与引擎，结果待确认。后续仅跟踪这一运行，按 job/step conclusion 和实际输出记录通过或失败，不因观察超时重启。即使全部构建成功，仍不关闭真实翻译/API、Windows ACL/凭据清理、三平台干净系统安装、签名公证与其他 V1–V5 门槛。
+[Frozen desktop validation 37023285205](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37023285205)（head `d83c4c0`）已实际完成，三平台 job/step conclusion 均成功：Linux x86_64（job110891494420）、Windows AMD64（job110891494626）、macOS arm64（job110891494866）。协调者读取各已完成 job 的公开合成日志，解析最终 JSON，核对 sourceCommit、冻结 GUI/离线导入、整包中文/空格迁移、原位置恢复与两引擎实际版本/pip check；所有已验证字段为真。Windows windowed 不输出阶段文字，实际包进程退出码与成功后生成的字段共同作为证据，未用源码入口结果替代冻结运行。
+
+本次关闭三平台**实际冻结构建与上述组件验证**，不关闭三平台干净系统安装、完整迁移 GUI、真实翻译/API、Windows ACL/凭据崩溃清理、签名公证、SBOM 与其他 V1–V5 门槛。各摘要的 notVerified 明确保留 cleanMachineInstalled、signing、realTranslation、realZoteroContentMigration 未验证；没有上传包或运行时、发布下载或操作私人文献。
 
 ## 冻结包内导入与子进程检查（2026-10-03）
 
