@@ -153,3 +153,18 @@ v11 升级前备份 library-before-v11.sqlite3；原子重建可空 SHA 表与�
 解析与完整IPC接收在独立spawn进程中受30秒预算监督，结果最多32 MiB；禁宏展开/交叉引用补填，不运行TeX。解析器原始诊断丢弃，不显示或写入原始来源日志。主桌面只保持最多8份、合计32 MiB可信预览，超量淘汰旧项；关闭清空并终止回收解析进程。冻结入口使用freeze_support，不在解析子进程创建Qt窗口或用户库；真实冻结包验收仍单列待执行。
 
 `import_metadata_preview(preview,selected_indices,collection_id=None)` 只接受非空、唯一、真正整数的有效索引；拒绝篡改、失效或已消费token。源文件重新读取、哈希及解析结果核对后再提交，漂移必须重新预览。所选记录用新UUID在单事务内创建无文件书目、目标集合关系及固定citation_imported事件；失败无半批记录且token可重试，成功消费token。返回 documentIds/importedCount/collectionId；不自动去重合并，不改已有记录，不引入文件对象或下载任务。UI共享ManagedIODialog，显式勾选、不默认全选；失败保留草稿但解析失败或来源变化禁止沿用旧预览提交。
+
+
+## 本机 Zotero 迁移与档案（v12）
+
+`preview_zotero_migration(directory)` 只接受显式本地目录。SnapshotReader用普通文件只读、禁止链接/非阻塞句柄复制并复核DB、WAL、SHM、journal；SQLite只操作受管副本。userdata白名单121/123/130并验证命名列与关系。返回token/sourceName/fingerprint/schemaVersion、items、collections、resources、counts与warnings。每item有sourceId/key/itemType/title/status/native或archive、metadata/deleted/warnings/selectable；子附件/笔记/批注由所选父条目传递纳入，不作为顶层重复选择。
+
+`import_zotero_preview(preview,selected_ids=None)` 验证完整可信预览、唯一顶层字符串ID及来源/真实资源未漂移。UI显式非空勾选；服务None表示所有可选顶层条目。部分选择只归档所选传递子图与相关集合、字段值、作者、标签、library/group；全选保留已支持读取的全图谱及空集合/保存搜索。源类型、字段、HTML笔记、批注位置或未复制资源不丢弃为假成功，原始档案与原生四类型适配分别计数。
+
+返回持久receipt：id/sourceName/sourceDirectory/schemaVersion/fingerprint/createdAt/selectedSourceIds/counts/mappings/sourceIdentities/collectionMappings/warnings。sourceIdentities保存libraryID/key/localId；本地UUID独立于来源。nativeActive/nativeTrashed、pdfs、archivedResources与archive分别计数。真实受管PDF每来源附件独立ID，允许多个父条目共用哈希对象；普通无所属参数的重复PDF导入遇多owner时拒绝歧义。受管其他/独立文件真实字节归受管档案对象；linked、annotation-cache、HTML伴随文件仍明示pending。
+
+`list_zotero_migrations()` 返回收据列表；`read_zotero_migration(id)` 返回{receipt,archive:{tables,items,resources}}，原始HTML只供纯文本查看。`export_zotero_resource(receipt_id,source_id,destination)` 仅导出已保存档案字节，校验固定receipt/hash路径、普通单链接、尺寸/身份/哈希后共享protected atomic_export；不自动执行文件。普通原件与整个来源Zotero目录纳入持久防覆盖保护。
+
+`cancel_zotero_migration()` 在复制、SQL检查、分块发布及提交前触发检查；提交后是真实成功收据，不假报回滚。PDF元信息通过spawn固定小结果监督，不在Qt进程调用原生解析；10秒或总预算剩余时间，失败/超时只保字节到档案。关闭终止回收活动校验进程并清临时副本。SQL迁移v12先备份，原生条目、集合、来源映射、档案和zotero_migrated审计同事务；失败清本轮新资源，不删除旧共享文件。硬崩溃发生在文件发布和SQL提交之间的孤立资源回收仍未验收。
+
+导入导出原生中心只路由已有PDF、引文、Zotero、译文和档案操作，复用校验、worker生命周期及导出保护。源码回归不替代真实Zotero含条目库或冻结安装包验收。

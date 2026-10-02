@@ -42,6 +42,8 @@ V1–V5、Windows ACL/凭据崩溃、三平台安装验收、linked授权复制�
 
 新源码 `db6efe3` 的 [首轮CI37007475463](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37007475463) 五项成功，包括三平台全部原生界面；Windows core执行191项（5项按平台跳过），三项在tearDown删除临时来源/备份时出现WinError32。日志明确指向测试内SQLite连接未关闭；使用sqlite3自身with只提交/回滚，不释放连接。测试改为标准closing加原有事务上下文，保留全部迁移/rollback/源码身份断言及清理，不忽略异常。修后本机14项针对性回归实际通过（2.399秒）；Windows修复后的结果待补录，尚不称六项全绿。
 
+修正后的源码 `6ad0877` 的 [CI37008353199](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37008353199) 已实际确认六项全部成功：Windows/macOS/Linux core与native-gui均完成，包含新的迁移、隔离校验与统一入口。首轮Windows错误保留上述记录；该结果只关闭本增量源码回归，不关闭实际含条目Zotero迁移或安装门槛。
+
 ## 无文件书目与真实 PDF 身份复核（v11）
 
 2026-10-02：此前必须先有 PDF 才能整理书目，无法覆盖无附件的书目管理。新增四类无文件条目，复用元数据、集合、标签、引用、候选、合并、回收与恢复。SQL SHA 为 NULL；不生成伪 PDF/哈希/IR。真实 PDF 操作在服务与事务入口拒绝书目身份；后添加的 PDF 保留独立 ID 和证据。
