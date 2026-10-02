@@ -103,6 +103,8 @@ class SummaryHTTPTests(unittest.TestCase):
         self.assertEqual(claims[0]['evidence'][0]['pageNumber'], 1)
         self.assertEqual(claims[0]['provenance']['source'], 'model')
         self.assertEqual(claims[0]['provenance']['usage']['total_tokens'], 40)
+        # Release the Windows exclusive lifetime lock before inspecting all files.
+        self.service.close()
         for file in (self.root / 'data').rglob('*'):
             if file.is_file():
                 self.assertNotIn(b'dummy-summary-http-key', file.read_bytes())
