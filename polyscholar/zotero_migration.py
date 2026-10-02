@@ -22,6 +22,8 @@ import time
 import uuid
 from .bibliographic import BibliographicPolicy
 from .metadata import validate_date
+from .migration_recovery import MigrationRecovery
+from .zotero_resources import ZoteroResourcePlanner, resource_identity, tree_manifest
 
 MIGRATION_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS desktop_zotero_migrations(
@@ -59,6 +61,7 @@ def unsafe_link(path):
 class ZoteroMigrationPolicy:
     max_database_bytes = 256 * 1024 * 1024
     max_archive_bytes = 64 * 1024 * 1024
+    max_resources = 20000
     max_items = 10000
     max_rows = 500000
     max_pdf_bytes = 100 * 1024 * 1024
@@ -107,6 +110,9 @@ class ZoteroSnapshotReader:
             digest, size = hashlib.sha256(), 0
             if destination:
                 output = destination.open('xb')
+                session = getattr(self,'recovery_session',None)
+                if session:
+                    session.register_stage_file(destination,os.fstat(output.fileno()))
             while True:
                 self.check()
                 data = os.read(fd, 1024 * 1024)
@@ -123,6 +129,9 @@ class ZoteroSnapshotReader:
             identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
             if identity(info) != identity(end) or identity(end) != identity(current):
                 raise ValueError('Zotero 来源已改变，请关闭 Zotero 后重新预览。')
+            if output:
+                output.flush()
+                os.fsync(output.fileno())
             return [*identity(end), digest.hexdigest()]
         finally:
             if output:
@@ -146,6 +155,17 @@ class ZoteroSnapshotReader:
             raise ValueError('Zotero 来源已改变，请关闭 Zotero 后重新预览。')
         # Recovery, WAL integration and integrity checks affect only this copy.
         # 恢复、WAL 整合和完整性检查只作用于应用副本。
+        session = getattr(self,'recovery_session',None)
+        if session:
+            # SQLite may create derived WAL/SHM while recovering the private copy.
+            # 先登记空侧车 inode，SQLite 恢复副本时派生的 WAL/SHM 也可安全回收。
+            for name in ('zotero.sqlite-wal','zotero.sqlite-shm'):
+                sidecar = self.staging/name
+                if not sidecar.exists():
+                    with sidecar.open('xb') as output:
+                        session.register_stage_file(sidecar,os.fstat(output.fileno()))
+                        output.flush()
+                        os.fsync(output.fileno())
         db = sqlite3.connect(self.staging / 'zotero.sqlite', timeout=1)
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA trusted_schema=OFF')
@@ -402,110 +422,65 @@ class ZoteroMigrationImporter:
         self._pdf_validator.close()
         with self._lock:
             for state in self._previews.values():
-                shutil.rmtree(state['stage'], ignore_errors=True)
+                session = state.get('recoverySession')
+                if session:
+                    try:
+                        session.finish(None)
+                    except (OSError,ValueError):
+                        pass  # Preserve the journal; unsafe cleanup must not prevent shutdown. / 保留日志，危险清理不能阻止关闭。
             self._previews.clear()
 
-    def preview(self, directory):
+    def preview(self, directory, linked_directory=None):
         with self._lock:
             if self._closed or self._busy:
                 raise ValueError('迁移处理正在进行或已关闭。')
             self._busy = True
             self._cancelled = threading.Event()
-        directory = Path(directory).absolute()
-        if not directory.is_dir() or directory.is_symlink():
-            self._busy = False
-            raise ValueError('请选择已关闭 Zotero 的本地资料目录。')
-        stage = Path(tempfile.mkdtemp(prefix='zotero-', dir=self.root))
+        stage, session = None, None
         try:
+            directory = Path(directory).absolute()
+            linked_directory = Path(linked_directory).absolute() if linked_directory else None
+            for path in (directory, linked_directory):
+                if path is not None and (not path.is_dir() or unsafe_link(path) or any(unsafe_link(p) for p in path.parents)):
+                    raise ValueError('请选择普通本地目录，不通过链接访问资料。')
+            linked_identity = self.directory_identity(linked_directory) if linked_directory else None
+            stage = Path(tempfile.mkdtemp(prefix='zotero-', dir=self.root))
+            session = MigrationRecovery(self.root).begin_stage(stage)
             reader = ZoteroSnapshotReader(stage, self._cancelled, self.policy)
+            reader.recovery_session = session
             graph, manifest, version = reader.graph(directory)
             items = ZoteroMigrationPlanner().plan(graph)
-            by_id = {row['sourceId']: row for row in items}
-            source_items = {row['itemID']: row for row in graph['items']}
-            child_ids = {r['itemID'] for table in ('itemAttachments','itemNotes','itemAnnotations') for r in graph.get(table,[]) if r.get('parentItemID') is not None}
+            child_ids = {r['itemID'] for table in ('itemAttachments', 'itemNotes', 'itemAnnotations')
+                         for r in graph.get(table, []) if r.get('parentItemID') is not None}
             for row in items:
                 row['selectable'] = int(row['sourceId']) not in child_ids
-            resources, pdfs, archive_files, total = [], [], [], 0
-            for attachment in graph.get('itemAttachments', []):
-                reader.check()
-                identifier = str(attachment['itemID'])
-                source_item = source_items[attachment['itemID']]
-                resource = dict(sourceId=identifier, parentSourceId=str(attachment.get('parentItemID')) if attachment.get('parentItemID') is not None else None,
-                                path=attachment.get('path'), status='metadata-only', reason='非受管 PDF 资源尚未复制，源信息完整保留。')
-                raw_path = attachment.get('path') or ''
-                parent = by_id.get(resource['parentSourceId'])
-                if attachment.get('linkMode') in (0, 1):
-                    key = source_item.get('key', '')
-                    name = raw_path.removeprefix('storage:')
-                    safe = (raw_path.startswith('storage:') and re.fullmatch(r'[A-Z0-9]{8}', key or '')
-                            and name not in ('', '.', '..') and '/' not in name and not re.match(r'^[A-Za-z]:|^\\\\', name)
-                            and (os.name != 'nt' or '\\' not in name))
-                    if not safe:
-                        resource.update(status='unsafe', reason='附件路径超出受管存储边界，未读取。')
-                    else:
-                        source = directory / 'storage' / key / name
-                        resource['sourcePath'] = str(source)
-                        if not source.exists():
-                            resource.update(status='missing', reason='受管文件缺失，未伪造资源。')
-                        else:
-                            staged = stage / (uuid.uuid4().hex + '.bin')
-                            try:
-                                identity = reader._read(source, staged, self.policy.max_pdf_bytes)
-                            except (OSError, ValueError):
-                                reader.check()
-                                staged.unlink(missing_ok=True)
-                                resource.update(status='unavailable', reason='受管文件无法安全复制；原始元数据保留。')
-                            else:
-                                total += identity[2]
-                                if total > self.policy.max_total_pdf_bytes:
-                                    raise ValueError('受管资源总量超过迁移上限，未截断文件。')
-                                resource.update(status='archive-ready', reason='真实文件复制到本地档案，不执行其内容。', filename=name, sha256=identity[-1], sizeBytes=identity[2])
-                                if attachment.get('contentType') in ('text/html', 'application/xhtml+xml'):
-                                    resource['ancillaryStatus'] = 'pending'
-                                    resource['ancillaryReason'] = 'HTML 主文件已保留；关联图片、样式及子目录尚未复制。'
-                                record = dict(resource=resource, staged=staged, source=source, identity=identity)
-                                if attachment.get('contentType') == 'application/pdf' and parent and parent['status'] == 'native':
-                                    valid, error_code = self._pdf_validator.validate(staged, self._cancelled, reader.deadline)
-                                    if not valid:
-                                        resource['reason'] = ('PDF 校验超时，原始字节保存在档案。' if error_code == 'pdf-validation-timeout'
-                                                              else 'PDF 未通过独立进程校验，原始字节保存在档案。')
-                                        resource['validationCode'] = error_code
-                                        archive_files.append(record)
-                                    else:
-                                        resource.update(status='pdf-ready', reason='真实受管 PDF 已在本地独立进程验证。')
-                                        pdfs.append(record)
-                                else:
-                                    archive_files.append(record)
-                elif attachment.get('linkMode') == 2:
-                    resource.update(status='pending-linked', reason='链接文件需用户另行授权路径范围；本次仅保留来源。')
-                elif attachment.get('linkMode') == 3:
-                    resource.update(status='remote-url', reason='链接 URL 保留元数据；未下载远程内容。')
-                else:
-                    resource.update(status='pending', reason='此资源模式尚未复制，完整来源元数据保留。')
-                resources.append(resource)
-            for annotation in graph.get('itemAnnotations', []):
-                resources.append(dict(
-                    sourceId=str(annotation['itemID']),
-                    parentSourceId=str(annotation['parentItemID']),
-                    path=None, kind='annotation-cache', status='pending-annotation-cache',
-                    reason='批注原始字段与坐标保留；可能存在的批注缓存图像尚未复制，不转换为已验证证据。',
-                ))
-            if manifest != reader.manifest(directory):
+            planner = ZoteroResourcePlanner(reader, self._pdf_validator, self._cancelled, self.policy, unsafe_link)
+            resources, pdfs, archive_files, trees = planner.plan(directory, graph, items, linked_directory)
+            if manifest != reader.manifest(directory) or (linked_directory and linked_identity != self.directory_identity(linked_directory)):
                 raise ValueError('Zotero 来源已改变，请重新预览。')
             collection_warnings = []
             for collection in graph.get('collections', []):
                 name = collection.get('collectionName')
-                if not isinstance(name, str) or not name.strip() or len(name)>128 or any(ord(c)<32 or c in '\x7f\x85\u2028\u2029' for c in name):
-                    collection_warnings.append('集合名称未通过原生校验，该集合及其子树仅保留档案：'+str(collection['collectionID']))
-            fingerprint = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+                if not isinstance(name, str) or not name.strip() or len(name) > 128 or any(ord(c) < 32 or c in '\x7f\x85\u2028\u2029' for c in name):
+                    collection_warnings.append('集合名称未通过原生校验，该集合及其子树仅保留档案：' + str(collection['collectionID']))
+            # 明确资源范围参与收据身份；目录或资源变化必须重新预览。
+            # Include explicit resource scope in receipt identity; changed sources require a fresh preview.
+            fingerprint_data = dict(database=manifest, linkedDirectory=str(linked_directory) if linked_directory else None,
+                                    resources=[dict(id=resource_identity(r), sha256=r.get('sha256'), status=r['status']) for r in resources])
+            fingerprint = hashlib.sha256(json.dumps(fingerprint_data, sort_keys=True).encode()).hexdigest()
             token = uuid.uuid4().hex
+            counts = dict(items=len(items), native=sum(i['status'] == 'native' for i in items),
+                          archive=sum(i['status'] == 'archive' for i in items), pdfs=len(pdfs), resources=len(resources),
+                          missing=sum(r['status'] == 'missing' for r in resources),
+                          unsupported=sum(r['status'] not in ('pdf-ready', 'archive-ready', 'not-required') for r in resources),
+                          archivedResources=len(archive_files))
+            warnings = ['未归档的内部/未适配表：' + ', '.join(reader.unarchived_tables),
+                        '请保持 Zotero 关闭；未适配字段、笔记 HTML、批注和关联保存在本地档案，未加载外链。',
+                        '链接附件只读取明确选定目录内的文件；批注缓存仅保存字节，尚未恢复原生批注。',
+                        '选择部分条目时只保存所选条目及其子图；全库保存搜索及设置仅全选时归档。']
             preview = dict(token=token, sourceName=directory.name, fingerprint=fingerprint, schemaVersion=version,
                            items=items, collections=graph.get('collections', []), resources=resources,
-                           counts=dict(items=len(items), native=sum(i['status']=='native' for i in items), archive=sum(i['status']=='archive' for i in items), pdfs=len(pdfs), resources=len(resources), missing=sum(r['status']=='missing' for r in resources), unsupported=sum(r['status'] not in ('pdf-ready','archive-ready') for r in resources), archivedResources=len(archive_files)),
-                           warnings=['未归档的内部/未适配表：'+', '.join(reader.unarchived_tables), '请保持 Zotero 关闭；未适配字段、笔记 HTML、批注和关联保存在本地档案，未加载外链。',
-                                     'linked 文件及批注图像尚待授权或适配；安全受管非 PDF/独立附件仅保留真实档案字节，不执行内容。', '选择部分条目时只保存所选条目及其子图；全库保存搜索及设置仅全选时归档。'] + collection_warnings)
-            # 适配字段也计入最终档案预算，不能只限制原始 SQL 行。
-            # Include adapted fields in the archive budget, rather than bounding SQL rows alone.
+                           counts=counts, warnings=warnings + collection_warnings)
             archive_size = len(json.dumps(dict(tables=graph, items=items, resources=resources), ensure_ascii=False).encode('utf-8'))
             if archive_size > self.policy.max_archive_bytes:
                 raise ValueError('Zotero 完整档案超过迁移上限，未截断数据。')
@@ -513,14 +488,32 @@ class ZoteroMigrationImporter:
                 reader.check()
                 if len(self._previews) >= 2:
                     raise ValueError('请先完成或关闭已有迁移预览。')
-                self._previews[token] = dict(preview=preview, graph=graph, stage=stage, directory=directory, manifest=manifest, pdfs=pdfs, archiveFiles=archive_files, maxArchiveBytes=self.policy.max_archive_bytes)
+                self._previews[token] = dict(preview=preview, graph=graph, stage=stage, recoverySession=session,
+                    directory=directory, manifest=manifest, pdfs=pdfs, archiveFiles=archive_files,
+                    resourceTrees=trees, linkedDirectory=linked_directory, linkedIdentity=linked_identity,
+                    maxArchiveBytes=self.policy.max_archive_bytes)
             return copy.deepcopy(preview)
         except Exception:
-            shutil.rmtree(stage, ignore_errors=True)
+            if session:
+                try:
+                    session.finish(None)
+                except (OSError, ValueError):
+                    pass  # 留待身份安全恢复，不掩盖原始错误。 / Defer safe recovery without masking the original failure.
+            elif stage:
+                shutil.rmtree(stage, ignore_errors=True)
             raise
         finally:
             with self._lock:
                 self._busy = False
+
+    @staticmethod
+    def directory_identity(path):
+        if unsafe_link(path) or any(unsafe_link(p) for p in path.parents):
+            raise ValueError('链接附件目录已改变，请重新预览。')
+        info = path.lstat()
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError('链接附件目录已改变，请重新预览。')
+        return [info.st_dev, info.st_ino]
 
     def selected(self, preview, selected_ids=None):
         with self._lock:
@@ -538,6 +531,11 @@ class ZoteroMigrationImporter:
         reader = ZoteroSnapshotReader(state['stage'], self._cancelled, self.policy)
         if reader.manifest(state['directory']) != state['manifest']:
             raise ValueError('Zotero 来源已改变，请重新预览。')
+        if state.get('linkedDirectory') and self.directory_identity(state['linkedDirectory']) != state['linkedIdentity']:
+            raise ValueError('链接附件目录已改变，请重新预览。')
+        for tree in state.get('resourceTrees', []):
+            if tree_manifest(Path(tree['rootPath']), reader, unsafe_link) != tree['manifest']:
+                raise ValueError('快照目录已改变，请重新预览。')
         for resource in state['pdfs'] + state['archiveFiles']:
             if reader._read(resource['source'], maximum=self.policy.max_pdf_bytes) != resource['identity']:
                 raise ValueError('Zotero 附件已改变，请重新预览。')
@@ -545,7 +543,12 @@ class ZoteroMigrationImporter:
     def consumed(self, preview):
         with self._lock:
             state = self._previews.pop(preview['token'])
-            shutil.rmtree(state['stage'], ignore_errors=True)
+            session = state.get('recoverySession')
+            if session:
+                try:
+                    session.finish(None)
+                except (OSError,ValueError):
+                    pass  # A committed receipt remains successful; startup retries cleanup. / 已提交收据仍成功，启动时重试清理。
 
 
 def verify_staged(path, expected_digest, check):
@@ -620,7 +623,8 @@ class ZoteroMigrationLibrary:
         graph = scoped_graph(state['graph'], selected, preview['items'])
         scoped_items = [i for i in preview['items'] if int(i['sourceId']) in {r['itemID'] for r in graph['items']}]
         scoped_resources = [copy.deepcopy(r) for r in preview['resources'] if r['sourceId'] in {i['sourceId'] for i in scoped_items}]
-        receipt_id, created = str(uuid.uuid4()), []
+        receipt_id = str(uuid.uuid4())
+        session = state['recoverySession']
         archive_directory = self.root / 'zotero-archive' / receipt_id
         def check():
             if cancelled is not None and cancelled.is_set():
@@ -632,6 +636,7 @@ class ZoteroMigrationLibrary:
                 document = self._new_bibliographic_document(item['metadata'])
                 documents.append(document)
                 mapping[item['sourceId']] = document['id']
+        committed = False
         try:
             with self.lock, self.connection() as db:
                 db.execute('BEGIN IMMEDIATE')
@@ -676,6 +681,7 @@ class ZoteroMigrationLibrary:
                     raise ValueError('迁移档案存储路径不安全。')
                 archive_parent.mkdir(exist_ok=True)
                 archive_directory.mkdir()
+                session.set_receipt(receipt_id,archive_directory)
                 scoped_resource_ids = {r['sourceId'] for r in scoped_resources}
                 archived_count = 0
                 for record in state['archiveFiles']:
@@ -685,18 +691,9 @@ class ZoteroMigrationLibrary:
                         continue
                     verify_staged(record['staged'], resource['sha256'], check)
                     target = archive_directory / (resource['sha256'] + '.bin')
-                    if not target.exists():
-                        with target.open('xb') as output, record['staged'].open('rb') as source:
-                            while True:
-                                check()
-                                chunk = source.read(1024*1024)
-                                if not chunk:
-                                    break
-                                output.write(chunk)
-                            output.flush()
-                            os.fsync(output.fileno())
-                        target.chmod(stat.S_IRUSR)
-                    next(r for r in scoped_resources if r['sourceId']==resource['sourceId'])['archivedPath'] = str(target.relative_to(self.root))
+                    session.publish(record['staged'],target,resource['sha256'],resource['sizeBytes'],check)
+                    resource_id = resource.get('resourceId',resource['sourceId'])
+                    next(r for r in scoped_resources if r.get('resourceId',r['sourceId'])==resource_id)['archivedPath'] = str(target.relative_to(self.root))
                     archived_count += 1
                 deleted = {str(row['itemID']) for row in graph.get('deletedItems', [])}
                 for pdf in state['pdfs']:
@@ -708,31 +705,7 @@ class ZoteroMigrationLibrary:
                     digest = resource['sha256']
                     verify_staged(pdf['staged'], digest, check)
                     target = self.objects / (digest + '.pdf')
-                    if unsafe_link(target) or (target.exists() and (not target.is_file() or target.stat().st_nlink != 1)):
-                        raise ValueError('受管对象路径不安全。')
-                    if not target.exists():
-                        created.append(target)
-                        with target.open('xb') as output, pdf['staged'].open('rb') as source:
-                            while True:
-                                check()
-                                chunk = source.read(1024*1024)
-                                if not chunk:
-                                    break
-                                output.write(chunk)
-                            output.flush()
-                            os.fsync(output.fileno())
-                        target.chmod(stat.S_IRUSR)
-                    else:
-                        with target.open('rb') as existing:
-                            existing_digest = hashlib.sha256()
-                            while True:
-                                check()
-                                chunk = existing.read(1024*1024)
-                                if not chunk:
-                                    break
-                                existing_digest.update(chunk)
-                        if existing_digest.hexdigest() != digest:
-                            raise ValueError('已有受管对象校验失败。')
+                    session.publish(pdf['staged'],target,digest,resource['sizeBytes'],check)
                     doc = dict(id=str(uuid.uuid4()), title=resource['filename'], filename=resource['filename'],
                                sha256=digest,sizeBytes=resource['sizeBytes'],authors='',doi='',year='',tags=[],notes='',
                                sourcePaths=[str(pdf['source'])],fileKind='pdf',createdAt=datetime.now(timezone.utc).isoformat())
@@ -746,7 +719,7 @@ class ZoteroMigrationLibrary:
                 for source_id, local_id in mapping.items():
                     if source_id in deleted:
                         db.execute('INSERT INTO desktop_trash VALUES(?,?)',(local_id,datetime.now(timezone.utc).isoformat()))
-                receipt = dict(id=receipt_id, fingerprint=preview['fingerprint'], sourceName=preview['sourceName'], sourceDirectory=str(state['directory']), schemaVersion=preview['schemaVersion'],
+                receipt = dict(id=receipt_id, publicationCleanupComplete=False, fingerprint=preview['fingerprint'], sourceName=preview['sourceName'], sourceDirectory=str(state['directory']), linkedDirectory=str(state.get('linkedDirectory') or ''), schemaVersion=preview['schemaVersion'],
                                createdAt=datetime.now(timezone.utc).isoformat(), selectedSourceIds=sorted(selected),
                                counts=dict(selected=len(selected),native=len(documents),pdfs=len(mapping)-len(documents),archive=len(scoped_items), nativeActive=sum(i['sourceId'] in selected and i['status']=='native' and not i['deleted'] for i in scoped_items),nativeTrashed=sum(i['sourceId'] in selected and i['status']=='native' and i['deleted'] for i in scoped_items),resources=len(scoped_resources),archivedResources=archived_count),
                                mappings=mapping, sourceIdentities={str(r['itemID']): {'libraryID':r['libraryID'],'key':r['key'],'localId':mapping.get(str(r['itemID']))} for r in graph['items']}, collectionMappings={str(k):v for k,v in collections.items()}, warnings=preview['warnings'])
@@ -761,22 +734,25 @@ class ZoteroMigrationLibrary:
                 if verify_source:
                     verify_source(state)
                 db.execute('INSERT INTO desktop_audit(point,outcome,created_at) VALUES(?,?,?)',('zotero_migrated','succeeded',receipt['createdAt']))
+            committed = True
+            with self.connection() as db:
+                cleanup_complete = session.finish(db)
+            receipt['publicationCleanupComplete'] = cleanup_complete
             return receipt
         except Exception:
-            if archive_directory.exists():
-                for path in archive_directory.iterdir():
-                    path.chmod(stat.S_IRUSR|stat.S_IWUSR)
-                    path.unlink()
-                archive_directory.rmdir()
-            for path in created:
-                path.chmod(stat.S_IRUSR|stat.S_IWUSR)
-                path.unlink(missing_ok=True)
+            if committed:
+                receipt['publicationCleanupComplete'] = False
+                return receipt  # Commit succeeded; cleanup failure is separately retryable. / 提交已成功，清理失败单独重试。
+            # SQL has rolled back; journal cleanup retains the reusable trusted preview.
+            # SQL 已回滚；只清理本轮发布，保留可信预览以便重试。
+            with self.connection() as db:
+                session.finish(db,keep_stage=True)
             raise
 
     def export_zotero_resource(self, receipt_id, source_id, destination):
         record = self.read_zotero_migration(receipt_id)
         resources = record['archive']['resources']
-        resource = next((row for row in resources if row['sourceId'] == source_id), None)
+        resource = next((row for row in resources if resource_identity(row) == source_id), None)
         if not resource or not resource.get('archivedPath'):
             raise ValueError('此资源没有可导出的本地档案文件。')
         digest = resource.get('sha256')
@@ -819,7 +795,7 @@ class ZoteroMigrationLibrary:
         # 只导出原始字节，不执行档案，不将 HTML 渲染为活动页面。
         self.write_export(destination, b''.join(chunks))
         self.audit('artifact_exported')
-        return dict(sourceId=source_id, sizeBytes=size, sha256=digest)
+        return dict(sourceId=resource['sourceId'], resourceId=resource_identity(resource), sizeBytes=size, sha256=digest)
 
     def list_zotero_migrations(self):
         with self.connection() as db:

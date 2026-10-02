@@ -29,3 +29,5 @@
 ## Zotero 迁移与导入导出入口
 
 新增 SnapshotReader/Planner/Importer/PdfValidator/Library 分离来源只读复制、纯字段适配、可信预览生命周期、隔离PDF校验和本地事务。Native ImportExportDialog复用现有业务；ZoteroMigrationDialog分页核对并通过ManagedIODialog管理共享IO，不在界面重做元数据规则。未适配字段和批注原始档案不转换成已验证证据；注释记录路径、取消、WAL和事务不变量并保持中英说明。191项全套及原生新旧流程通过，完整文件模块进一步拆分、真实资料库及安装验收仍待执行。
+
+资源迁移由 ZoteroResourcePlanner 复用只读 SnapshotReader 与隔离 PDF 校验，MigrationRecoverySession 统一日志、发布和恢复；UI只传明确目录与资源身份，预览、提交、导出共享边界。未适配的原生批注及链接HTML周边继续单列，失败与未知身份不作成功清理。

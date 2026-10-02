@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from .managed_dialog import ManagedIODialog
 from .duplicates import FIELD_LABELS, readable_value
 from .searches import TYPES
+from ..zotero_resources import resource_identity
 
 
 def plain_json(value):
@@ -54,7 +55,7 @@ class ZoteroMigrationDialog(ManagedIODialog):
         heading = QLabel('从本机 Zotero 迁移')
         heading.setObjectName('heading')
         layout.addWidget(heading)
-        hint = QLabel('先退出 Zotero，再选择资料目录（包含 zotero.sqlite 和 storage）。核对后勾选迁移；关联子项随父条目纳入。暂不支持的内容另存为本地原始档案。原目录不改写；不下载链接附件、不自动合并重复条目。')
+        hint = QLabel('退出 Zotero，选择资料目录并预览。勾选需要迁移的条目，关联子项一并迁移。')
         hint.setWordWrap(True)
         layout.addWidget(hint)
         source = QHBoxLayout()
@@ -68,6 +69,16 @@ class ZoteroMigrationDialog(ManagedIODialog):
         for widget in (self.path, self.browse_button, self.preview_button):
             source.addWidget(widget)
         layout.addLayout(source)
+        linked = QHBoxLayout()
+        self.linked_path = QLineEdit()
+        self.linked_path.setPlaceholderText('链接附件所在目录（可选）')
+        self.linked_path.setAccessibleName('链接附件所在目录，可选')
+        self.linked_browse_button = QPushButton('选择附件目录')
+        self.linked_browse_button.clicked.connect(self.browse_linked)
+        linked.addWidget(QLabel('链接附件目录（可选）'))
+        linked.addWidget(self.linked_path, 1)
+        linked.addWidget(self.linked_browse_button)
+        layout.addLayout(linked)
         self.status = QLabel('尚未检查资料目录。')
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
@@ -144,6 +155,7 @@ class ZoteroMigrationDialog(ManagedIODialog):
             actions.addWidget(widget)
         layout.addLayout(actions)
         self.path.textChanged.connect(self.source_changed)
+        self.linked_path.textChanged.connect(self.source_changed)
         self.update_controls()
 
     @staticmethod
@@ -153,8 +165,11 @@ class ZoteroMigrationDialog(ManagedIODialog):
         widget.setAccessibleName(name)
         return widget
 
+    def source_paths(self):
+        return (self.path.text().strip(), self.linked_path.text().strip())
+
     def preview_current(self):
-        return self._preview_valid and self._preview is not None and self.path.text().strip() == self._preview_source
+        return self._preview_valid and self._preview is not None and self.source_paths() == self._preview_source
 
     def update_controls(self):
         if not hasattr(self, 'import_button'):
@@ -163,6 +178,8 @@ class ZoteroMigrationDialog(ManagedIODialog):
         editable = not busy and not self._imported
         self.path.setReadOnly(not editable)
         self.browse_button.setEnabled(editable)
+        self.linked_path.setReadOnly(not editable)
+        self.linked_browse_button.setEnabled(editable)
         self.preview_button.setEnabled(editable and bool(self.path.text().strip()))
         self.records.setEnabled(not busy and not self._imported)
         current = editable and self.preview_current()
@@ -185,6 +202,11 @@ class ZoteroMigrationDialog(ManagedIODialog):
         if path:
             self.path.setText(path)
 
+    def browse_linked(self):
+        path = QFileDialog.getExistingDirectory(self, '选择链接附件所在目录')
+        if path:
+            self.linked_path.setText(path)
+
     def source_changed(self):
         if self._preview and not self.preview_current():
             self.show_status('目录已改变或上次检查失败；请重新检查后迁移。原预览保留。')
@@ -194,10 +216,10 @@ class ZoteroMigrationDialog(ManagedIODialog):
         if self._busy or self.window.io_worker is not None or self._imported:
             return
         self._preview_valid = False
-        source = self.path.text().strip()
+        source, linked_source = self.source_paths()
         def ready(preview):
             self._preview = preview
-            self._preview_source = source
+            self._preview_source = (source, linked_source)
             self._preview_valid = True
             self._selected.clear()
             self._page = 0
@@ -205,7 +227,7 @@ class ZoteroMigrationDialog(ManagedIODialog):
             self.overview.setPlainText(self.overview_text(preview))
             self.show_status('目录检查完成。请查看条目状态、集合及附件报告后勾选迁移。')
             self.update_controls()
-        self.run(lambda: self.window.service.preview_zotero_migration(source), ready, '正在复制并检查本地资料副本…')
+        self.run(lambda: self.window.service.preview_zotero_migration(source, linked_directory=linked_source or None), ready, '正在复制并检查本地资料副本…')
 
     def show_page(self):
         self._building = True
@@ -236,7 +258,7 @@ class ZoteroMigrationDialog(ManagedIODialog):
     def overview_text(preview):
         names = {'items': '来源条目', 'native': '可用书目', 'archive': '原始档案条目',
                  'pdfs': '已验证 PDF', 'resources': '来源附件', 'missing': '文件缺失',
-                 'unsupported': '尚未复制的资源'}
+                 'unsupported': '尚未复制的资源', 'archivedResources': '已归档资源文件'}
         lines = [preview['sourceName'], '目录检查统计：']
         lines.extend(f'{names.get(key, key)}：{value}' for key, value in preview['counts'].items())
         lines.extend(['', '核对事项：', *preview['warnings'], '', '集合：'])
@@ -244,7 +266,9 @@ class ZoteroMigrationDialog(ManagedIODialog):
             lines.append(f"{item.get('collectionName', '')}（来源 {item['collectionID']}，父集合 {item.get('parentCollectionID') or '无'}）")
         lines.extend(['', '附件：'])
         for item in preview.get('resources', []):
-            lines.append(f"{item.get('filename') or item.get('path') or '未命名'} · {item.get('reason', '')}")
+            lines.append(f"{item.get('relativePath') or item.get('filename') or item.get('path') or '未命名'} · {item.get('reason', '')}")
+            if item.get('ancillaryReason'):
+                lines.append(item['ancillaryReason'])
         return '\n'.join(lines)
 
     def selection_changed(self, item):
@@ -274,7 +298,7 @@ class ZoteroMigrationDialog(ManagedIODialog):
             self.window.refresh()
             self.display_archive(receipt)
             self.tabs.setCurrentIndex(2)
-            self.show_status('迁移已保存。请核对收据中的原生条目、附件及原始档案数量。')
+            self.show_status('迁移已保存。请核对收据中的原生条目、附件及原始档案数量。' if receipt.get('publicationCleanupComplete', True) else '条目迁移已完成，暂存清理待复核；请重启后检查恢复状态。')
             self.update_controls()
             self.defer_after_io(lambda: self.open_receipt(receipt['id']))
         self.run(lambda: self.window.service.import_zotero_preview(preview, selected), ready, '正在迁移选中条目并保存本地收据…')
@@ -314,8 +338,8 @@ class ZoteroMigrationDialog(ManagedIODialog):
         receipt = archive.get('receipt', {})
         for resource in archive.get('archive', {}).get('resources', []):
             if resource.get('archivedPath'):
-                self.archive_resources.addItem(resource.get('filename', resource['sourceId']),
-                                               (receipt['id'], resource['sourceId'], resource.get('filename', 'resource.bin')))
+                self.archive_resources.addItem(resource.get('relativePath') or resource.get('filename', resource['sourceId']),
+                                               (receipt['id'], resource_identity(resource), resource.get('filename', 'resource.bin')))
         self.archive_resources.blockSignals(False)
         def add_groups(prefix, value):
             if isinstance(value, dict):

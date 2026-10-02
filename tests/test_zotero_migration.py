@@ -195,6 +195,9 @@ class ZoteroMigrationTests(unittest.TestCase):
             receipt=self.service.import_zotero_preview(preview)
             archive=self.service.read_zotero_migration(receipt['id'])['archive']
             self.assertEqual(archive['tables']['itemDataValues'][-1]['value'],'Only WAL')
+            self.assertTrue(receipt['publicationCleanupComplete'])
+            self.assertEqual(list(self.service.store.root.glob('zotero-????????')), [])
+            self.assertEqual(list((self.service.store.root/'migration-recovery').glob('*.json')), [])
             self.assertEqual(before,{p.name:p.read_bytes() for p in self.source.glob('zotero.sqlite*')})
         finally: writer.close()
 
@@ -226,7 +229,9 @@ class ZoteroMigrationTests(unittest.TestCase):
         archive=self.service.read_zotero_migration(receipt['id'])['archive']
         self.assertEqual({r['itemID'] for r in archive['tables']['items']},{1,3,6})
         self.assertEqual(receipt['counts']['native'],1)
-        self.assertEqual(receipt['counts']['archivedResources'],1)
+        self.assertEqual(receipt['counts']['archivedResources'],2)
+        companion = next(r for r in archive['resources'] if r.get('kind') == 'snapshot-companion')
+        self.assertEqual((self.service.store.root/companion['archivedPath']).read_bytes(), (html.parent/'paper.pdf').read_bytes())
         resource=archive['resources'][0]
         self.assertEqual((self.service.store.root/resource['archivedPath']).read_bytes(),html.read_bytes())
         exported=self.root/'recovered.html'
@@ -243,12 +248,12 @@ class ZoteroMigrationTests(unittest.TestCase):
             db.execute("UPDATE itemAttachments SET contentType='text/html',path='storage:page.html' WHERE itemID=3")
         (self.source/'storage'/'CCCCCCCC'/'page.html').write_text('local raw bytes')
         preview=self.service.preview_zotero_migration(self.source)
-        real_open=Path.open
-        def failed_open(path,*args,**kwargs):
-            if 'zotero-archive' in path.parts and path.suffix=='.bin':
+        real_link=os.link
+        def failed_link(source,target,*args,**kwargs):
+            if 'zotero-archive' in Path(target).parts:
                 raise PermissionError('synthetic disk failure')
-            return real_open(path,*args,**kwargs)
-        with patch.object(Path,'open',failed_open):
+            return real_link(source,target,*args,**kwargs)
+        with patch('polyscholar.migration_recovery.os.link',failed_link):
             with self.assertRaises(PermissionError): self.service.import_zotero_preview(preview)
         self.assertEqual(self.service.list_documents(),[])
         self.assertEqual(self.service.list_zotero_migrations(),[])

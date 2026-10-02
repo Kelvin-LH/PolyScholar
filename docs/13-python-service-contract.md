@@ -157,14 +157,16 @@ v11 升级前备份 library-before-v11.sqlite3；原子重建可空 SHA 表与�
 
 ## 本机 Zotero 迁移与档案（v12）
 
-`preview_zotero_migration(directory)` 只接受显式本地目录。SnapshotReader用普通文件只读、禁止链接/非阻塞句柄复制并复核DB、WAL、SHM、journal；SQLite只操作受管副本。userdata白名单121/123/130并验证命名列与关系。返回token/sourceName/fingerprint/schemaVersion、items、collections、resources、counts与warnings。每item有sourceId/key/itemType/title/status/native或archive、metadata/deleted/warnings/selectable；子附件/笔记/批注由所选父条目传递纳入，不作为顶层重复选择。
+`preview_zotero_migration(directory,linked_directory=None)` 只接受显式本地目录；可选 linked_directory 限定链接附件读取范围，相对 attachments: 路径和本平台范围内绝对路径可用，其他平台绝对路径不猜测。SnapshotReader用普通文件只读、禁止链接/非阻塞句柄复制并复核DB、WAL、SHM、journal；SQLite只操作受管副本。userdata白名单121/123/130并验证命名列与关系。返回token/sourceName/fingerprint/schemaVersion、items、collections、resources、counts与warnings。每item有sourceId/key/itemType/title/status/native或archive、metadata/deleted/warnings/selectable；子附件/笔记/批注由所选父条目传递纳入，不作为顶层重复选择。
 
 `import_zotero_preview(preview,selected_ids=None)` 验证完整可信预览、唯一顶层字符串ID及来源/真实资源未漂移。UI显式非空勾选；服务None表示所有可选顶层条目。部分选择只归档所选传递子图与相关集合、字段值、作者、标签、library/group；全选保留已支持读取的全图谱及空集合/保存搜索。源类型、字段、HTML笔记、批注位置或未复制资源不丢弃为假成功，原始档案与原生四类型适配分别计数。
 
-返回持久receipt：id/sourceName/sourceDirectory/schemaVersion/fingerprint/createdAt/selectedSourceIds/counts/mappings/sourceIdentities/collectionMappings/warnings。sourceIdentities保存libraryID/key/localId；本地UUID独立于来源。nativeActive/nativeTrashed、pdfs、archivedResources与archive分别计数。真实受管PDF每来源附件独立ID，允许多个父条目共用哈希对象；普通无所属参数的重复PDF导入遇多owner时拒绝歧义。受管其他/独立文件真实字节归受管档案对象；linked、annotation-cache、HTML伴随文件仍明示pending。
+返回持久receipt：id/sourceName/sourceDirectory/linkedDirectory/schemaVersion/fingerprint/createdAt/selectedSourceIds/counts/mappings/sourceIdentities/collectionMappings/warnings。sourceIdentities保存libraryID/key/localId；本地UUID独立于来源。nativeActive/nativeTrashed、pdfs、archivedResources与archive分别计数。真实受管PDF每来源附件独立ID，允许多个父条目共用哈希对象；普通无所属参数的重复PDF导入遇多owner时拒绝歧义。受管其他/独立文件真实字节归受管档案对象；链接附件、受管HTML伴随文件、嵌入图像及按库类型定位的批注缓存保存真实字节。缓存未解码、原生批注未恢复；链接HTML周边未映射仍明示pending。
 
-`list_zotero_migrations()` 返回收据列表；`read_zotero_migration(id)` 返回{receipt,archive:{tables,items,resources}}，原始HTML只供纯文本查看。`export_zotero_resource(receipt_id,source_id,destination)` 仅导出已保存档案字节，校验固定receipt/hash路径、普通单链接、尺寸/身份/哈希后共享protected atomic_export；不自动执行文件。普通原件与整个来源Zotero目录纳入持久防覆盖保护。
+`list_zotero_migrations()` 返回收据列表；`read_zotero_migration(id)` 返回{receipt,archive:{tables,items,resources}}，原始HTML只供纯文本查看。`export_zotero_resource(receipt_id,source_id,destination)` 的第二参数传资源 resourceId（旧单文件资源仍等于 sourceId）。此接口 仅导出已保存档案字节，校验固定receipt/hash路径、普通单链接、尺寸/身份/哈希后共享protected atomic_export；不自动执行文件。普通原件与整个来源Zotero目录与已选链接目录纳入持久防覆盖保护。
 
-`cancel_zotero_migration()` 在复制、SQL检查、分块发布及提交前触发检查；提交后是真实成功收据，不假报回滚。PDF元信息通过spawn固定小结果监督，不在Qt进程调用原生解析；10秒或总预算剩余时间，失败/超时只保字节到档案。关闭终止回收活动校验进程并清临时副本。SQL迁移v12先备份，原生条目、集合、来源映射、档案和zotero_migrated审计同事务；失败清本轮新资源，不删除旧共享文件。硬崩溃发生在文件发布和SQL提交之间的孤立资源回收仍未验收。
+`cancel_zotero_migration()` 在复制、SQL检查、分块发布及提交前触发检查；提交后是真实成功收据，不假报回滚。PDF元信息通过spawn固定小结果监督，不在Qt进程调用原生解析；10秒或总预算剩余时间，失败/超时只保字节到档案。关闭终止回收活动校验进程并清临时副本。SQL迁移v12先备份，原生条目、集合、来源映射、档案和zotero_migrated审计同事务；失败清本轮新资源，不删除旧共享文件。持久发布日志登记文件身份后用硬链接发布；提交后清暂存，返回publicationCleanupComplete。启动在库锁和模式成功后恢复合法日志，身份替换/未知文件保留pending；详见迁移范围。进程崩溃回归不替代断电、Windows ACL或凭据清理验收。
 
 导入导出原生中心只路由已有PDF、引文、Zotero、译文和档案操作，复用校验、worker生命周期及导出保护。源码回归不替代真实Zotero含条目库或冻结安装包验收。
+
+资源报告新增resourceId；主文件仍取sourceId，快照子文件取sourceId:snapshot:relativePath，批注缓存取sourceId:annotation-cache。sourceId用于所选条目传递子图，resourceId用于逐文件归档及导出，避免同一源条目的多个文件覆盖。

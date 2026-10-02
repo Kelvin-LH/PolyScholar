@@ -22,6 +22,7 @@ from .fulltext import FulltextLibrary, FULLTEXT_SCHEMA, index_current_ir
 from .trash import TrashLibrary, TRASH_SCHEMA
 from .duplicates import DuplicateLibrary, MERGE_SCHEMA
 from .bibliographic import BibliographicPolicy
+from .migration_recovery import MigrationRecovery
 from .zotero_migration import ZoteroMigrationLibrary, MIGRATION_SCHEMA
 
 AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt','document_trashed','document_restored','purge_cleanup','documents_merged','bibliographic_created','primary_pdf_changed','citation_imported','zotero_migrated'})
@@ -43,6 +44,11 @@ class LocalStore(ZoteroMigrationLibrary, DuplicateLibrary, TrashLibrary, Fulltex
         self._instance = LibraryLock(self.root)
         try:
             self._initialize()
+            # Recover only after schema success and while the OS lifecycle lock is held.
+            # 模式成功且 OS 生命周期锁仍持有时，才恢复迁移发布日志。
+            self._migration_recovery = MigrationRecovery(self.root)
+            with self.connection() as db:
+                self.migration_recovery_report = self._migration_recovery.recover(db)
         except Exception:
             self.close()
             raise
@@ -570,7 +576,12 @@ class LocalStore(ZoteroMigrationLibrary, DuplicateLibrary, TrashLibrary, Fulltex
         with self.connection() as db:
             pending_roots = [Path(entry['path']) for row in db.execute('SELECT paths FROM desktop_purge_cleanup')
                              for entry in json.loads(row[0])]
-            zotero_roots = [Path(json.loads(row[0])['sourceDirectory']) for row in db.execute('SELECT receipt FROM desktop_zotero_migrations')]
+            zotero_roots = []
+            for row in db.execute('SELECT receipt FROM desktop_zotero_migrations'):
+                receipt = json.loads(row[0])
+                zotero_roots.append(Path(receipt['sourceDirectory']))
+                if receipt.get('linkedDirectory'):
+                    zotero_roots.append(Path(receipt['linkedDirectory']))
         documents=self.list_documents()
         originals=[path for document in documents for path in document.get('sourcePaths',[])]
         protected=[*self.objects.glob('*.pdf'), *self.root.glob('*.sqlite3*')]

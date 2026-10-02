@@ -70,6 +70,8 @@ Python / PySide6 原型，使用合成测试 PDF。
 
 **Zotero 迁移预览**
 
+可选择本机资料目录和链接附件目录，预览后迁移；档案资源支持逐文件导出。
+
 ![Zotero 迁移原生界面](design/screenshots/zotero-migration-python.png)
 
 ![原生文献库](design/screenshots/library-python.png)

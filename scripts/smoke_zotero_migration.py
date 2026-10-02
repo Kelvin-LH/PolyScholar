@@ -46,11 +46,15 @@ def main():
         source = root / 'synthetic-zotero'
         fixture(source)
         with closing(sqlite3.connect(source / 'zotero.sqlite')) as db:
-            db.executescript("INSERT INTO items VALUES(8,2,'HHHHHHHH',1); INSERT INTO itemAttachments VALUES(8,5,0,'text/html','storage:note.html');")
+            db.executescript("INSERT INTO items VALUES(8,2,'HHHHHHHH',1); INSERT INTO itemAttachments VALUES(8,5,0,'text/html','storage:note.html'); INSERT INTO items VALUES(9,2,'IIIIIIII',1); INSERT INTO itemAttachments VALUES(9,1,2,'application/pdf','attachments:linked.pdf');")
         html = b'<html><script>do not run</script><body>Synthetic archive</body></html>'
         html_directory = source / 'storage' / 'HHHHHHHH'
         html_directory.mkdir()
         (html_directory / 'note.html').write_bytes(html)
+        (html_directory / 'picture.png').write_bytes(b'synthetic image companion bytes')
+        linked = root / 'explicit-linked'
+        linked.mkdir()
+        (linked / 'linked.pdf').write_bytes((source / 'storage/CCCCCCCC/paper.pdf').read_bytes())
         service = LocalService(root / 'local')
         window = Window(service)
         try:
@@ -63,17 +67,23 @@ def main():
             assert center._closed
             dialog = window.zotero_migration_dialog
             dialog.path.setText(str(source))
+            dialog.linked_path.setText(str(linked))
             wait(lambda: dialog.preview_button.isEnabled())
             QTest.mouseClick(dialog.preview_button, Qt.MouseButton.LeftButton)
             idle(window, dialog)
             assert dialog._preview is not None, dialog.status.text()
             assert not dialog._selected and not dialog.import_button.isEnabled()
+            assert next(r for r in dialog._preview['resources'] if r['sourceId']=='9')['status'] == 'pdf-ready'
             for row in range(dialog.records.count()):
                 item = dialog.records.item(row)
                 record = item.data(Qt.ItemDataRole.UserRole)
                 assert bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable) == record['selectable']
             QTest.mouseClick(dialog.select_all_button, Qt.MouseButton.LeftButton)
             assert dialog._selected == {'1', '2', '5'}
+            dialog.linked_path.setText(str(root / 'other-linked'))
+            assert not dialog.import_button.isEnabled()
+            dialog.linked_path.setText(str(linked))
+            wait(lambda: dialog.import_button.isEnabled())
             dialog.path.setText(str(source / 'wrong'))
             assert not dialog.import_button.isEnabled()
             dialog.path.setText(str(source))
@@ -83,7 +93,7 @@ def main():
             assert dialog._imported, dialog.status.text()
             assert not dialog.import_button.isEnabled()
             receipt = service.list_zotero_migrations()[0]
-            assert receipt['counts']['native'] == 2 and receipt['counts']['pdfs'] == 2
+            assert receipt['counts']['native'] == 2 and receipt['counts']['pdfs'] == 3
             assert any('itemNotes' in key for key in dialog._archive)
             key = next(key for key in dialog._archive if 'itemNotes' in key)
             dialog.archive_sections.setCurrentIndex(dialog.archive_sections.findData(key))
@@ -91,7 +101,7 @@ def main():
             assert '<img src=' in dialog.archive_text.toPlainText()
             # 档案笔记是普通文字，不加载 HTML/外链。 / Source notes remain plain text, with no HTML or external loading.
             assert '&lt;script&gt;' in dialog.archive_text.toHtml()
-            assert dialog.archive_resources.count() == 2
+            assert dialog.archive_resources.count() == 3
             dialog.archive_resources.setCurrentIndex(1)
             destination = root / 'exported-note.html'
             wait(lambda: dialog.export_resource_button.isEnabled())
@@ -99,6 +109,13 @@ def main():
                 QTest.mouseClick(dialog.export_resource_button, Qt.MouseButton.LeftButton)
                 idle(window, dialog)
             assert destination.read_bytes() == html
+            dialog.archive_resources.setCurrentIndex(2)
+            companion = root / 'exported-picture.png'
+            wait(lambda: dialog.export_resource_button.isEnabled())
+            with patch('polyscholar.ui.zotero_migration.QFileDialog.getSaveFileName', return_value=(str(companion), '')):
+                QTest.mouseClick(dialog.export_resource_button, Qt.MouseButton.LeftButton)
+                idle(window, dialog)
+            assert companion.read_bytes() == (html_directory / 'picture.png').read_bytes()
             dialog.close()
             window.open_zotero_migration()
             reopened = window.zotero_migration_dialog
@@ -113,7 +130,7 @@ def main():
             # Verify paging and retained selection without claiming engine load acceptance.
             reopened._preview = dict(items=[dict(sourceId=str(index), itemType='webpage', status='archive', title='Synthetic', selectable=True) for index in range(205)])
             reopened._preview_valid = True
-            reopened._preview_source = ''
+            reopened._preview_source = reopened.source_paths()
             reopened.show_page()
             assert reopened.records.count() == 100
             reopened.records.item(0).setCheckState(Qt.CheckState.Checked)
@@ -140,6 +157,7 @@ def main():
                 window.open_zotero_migration()
                 dialog = window.zotero_migration_dialog
                 dialog.path.setText(str(source))
+                dialog.linked_path.setText(str(linked))
                 dialog.load()
                 idle(window, dialog)
                 dialog.resize(1000, 720)

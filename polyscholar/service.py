@@ -118,8 +118,8 @@ class LocalService:
     def list_documents(self):
         return self.store.list_root_documents()
 
-    def preview_zotero_migration(self, directory):
-        return self._zotero_importer.preview(directory)
+    def preview_zotero_migration(self, directory, linked_directory=None):
+        return self._zotero_importer.preview(directory, linked_directory)
 
     def cancel_zotero_migration(self):
         self._zotero_importer.cancel()
