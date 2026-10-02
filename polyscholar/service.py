@@ -122,7 +122,25 @@ class LocalService:
     def delete_attachment(self, parent_id, document_id):
         return self.store.delete_attachment(parent_id, document_id)
 
+    def search_fulltext(self, text, **criteria):
+        return self.store.search_fulltext(text, **criteria)
+
+    def clear_fulltext_index(self, document_id=None):
+        return self.store.clear_fulltext_index(document_id)
+
+    def rebuild_fulltext_index(self, document_id=None):
+        return self.store.rebuild_fulltext_index(document_id)
+
     def parse_document(self, document_id):
+        try:
+            return self._parse_document(document_id)
+        except Exception:
+            with self._lock:
+                if not self._closed:
+                    self.store.note_parse_failure(document_id)
+            raise
+
+    def _parse_document(self, document_id):
         document = self.store.document(document_id)
         worker = self.resources / 'integrations/parse_worker.py'
         if not worker.is_file():

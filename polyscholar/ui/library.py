@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, QListW
 from .workers import safe_error
 from .creators import CreatorsDialog
 from .searches import SearchDialog
+from .fulltext import FullTextDialog
 from copy import deepcopy
 from ..metadata import APPLICABLE, legacy_creators, creator_display
 
@@ -16,7 +17,7 @@ class LibraryPage:
         advanced=QHBoxLayout();self.advanced_search_button=self.button('高级元数据检索',self.edit_search);advanced.addWidget(self.advanced_search_button);self.saved_searches=QComboBox();self.saved_searches.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon);self.saved_searches.setMinimumContentsLength(8);self.saved_searches.addItem('未选择保存搜索',None);self.saved_searches.currentIndexChanged.connect(self.select_saved_search);advanced.addWidget(self.saved_searches,1);l.addLayout(advanced)
         search_actions=QHBoxLayout();self.save_search_button=self.button('保存新搜索',self.save_new_search);search_actions.addWidget(self.save_search_button)
         self.update_search_button=self.button('更新保存搜索',self.update_saved_search);search_actions.addWidget(self.update_search_button)
-        self.delete_search_button=self.button('删除搜索',self.delete_saved_search);search_actions.addWidget(self.delete_search_button);search_actions.addStretch();l.addLayout(search_actions)
+        self.delete_search_button=self.button('删除搜索',self.delete_saved_search);search_actions.addWidget(self.delete_search_button);self.fulltext_button=self.button('本地全文检索',self.open_fulltext);search_actions.addWidget(self.fulltext_button);search_actions.addStretch();l.addLayout(search_actions)
         self.search_scope=QLabel('');self.search_scope.setWordWrap(True);l.addWidget(self.search_scope);self.update_search_controls()
         self.io_status=QLabel('');l.addWidget(self.io_status)
         split=QSplitter()
@@ -183,6 +184,14 @@ class LibraryPage:
     def clear_filters(self):
         self.advanced_query={'match':'all','conditions':[]};self._saved_query_changed=False;self.saved_searches.setCurrentIndex(0)
         self.search.clear();self.tag_filter.clearSelection();self.include_children.setChecked(False);self.collection_tree.setCurrentItem(self.collection_tree.topLevelItem(0));self.update_search_controls();self.filter_docs()
+
+    def open_fulltext(self):
+        if self.io_worker is not None or self._closing:return
+        if hasattr(self,'fulltext_dialog') and not self.fulltext_dialog._closed:
+            self.fulltext_dialog.show();self.fulltext_dialog.raise_();self.fulltext_dialog.activateWindow();return
+        criteria={'metadata_text':self.search.text(),'collection_id':self.current_collection(),'unfiled':self.collection_view()=='__unfiled__','tags':[item.text() for item in self.tag_filter.selectedItems()],'include_descendants':self.include_children.isChecked(),'query':deepcopy(self.advanced_query) if self.advanced_query['conditions'] else None}
+        scope='打开时的范围：'+self.collection_tree.currentItem().text(0)+'；快速搜索 '+(self.search.text() or '不限')+'；标签 '+('、'.join(criteria['tags']) or '不限')+f"；高级条件 {len(self.advanced_query['conditions'])} 条，满足{'全部' if self.advanced_query['match']=='all' else '任一'}"+('；包含子集合' if criteria['include_descendants'] else '')
+        self.fulltext_dialog=FullTextDialog(self,criteria,scope);self.fulltext_dialog.show();self.fulltext_dialog.search()
 
     def update_search_controls(self):
         count=len(self.advanced_query['conditions']);selected=self.saved_searches.currentData() is not None

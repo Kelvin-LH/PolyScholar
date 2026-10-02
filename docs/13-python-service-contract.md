@@ -96,3 +96,14 @@ CSL JSON 保留类型、作者/编者角色、日期和出版字段；BibTeX 普
 `list_saved_searches/save_saved_search(name,query,search_id=None)/delete_saved_search` 在本地保存命名规则，返回 id/name/query/createdAt/updatedAt。保存的是规则，不是结果 ID，也不自动保存当前集合/快速搜索范围；打开时动态计算并叠加界面当前筛选。规则编辑须主动更新保存项，取消不写库。SQLite v7 升级前备份 `library-before-v7.sqlite3`，新增保存搜索表，旧文献、附件、集合和证据保持。迁移的新表、审计触发器及版本号同事务；保存搜索新增/更新/删除审计与数据同事务，仅固定事件和时间。
 
 此增量对标 [Zotero 官方高级搜索与保存搜索](https://www.zotero.org/support/searching)，尚未包含全文索引、嵌套保存规则或日期相对条件。
+
+
+## 本地 PDF 全文索引（v8）
+
+`search_fulltext(text,collection_id=None,unfiled=False,tags=None,include_descendants=False,query=None,limit=200,metadata_text='')` 检索当前 DocumentIR 文本。元数据规则先筛主条目，再检索其家族 PDF；命中保留实际 documentId/parentDocumentId/revisionId/blockId、页码及坐标，子附件不冒充主 PDF。短字及中文采用字面子串；Python casefold 后三字符以上走 SQLite FTS5 trigram 候选与 instr 精确校验，一、二字符走索引文本扫描。百分号、引号、OR 等不是表达式。返回精确 total、显式 truncated，默认最多200条、允许1–1000；每项只返回最多512字符原文摘录，不返回完整大块文本。全文 SQL 和摘录计算检查30秒预算，超时拒绝部分结果；metadata 筛选沿用现有实现，并在进入/返回全文阶段检查预算。
+
+coverage 区分 indexed/no_text/cleared/unparsed/parse_failed；最近重解析失败且仍有有效旧版本时保留索引，并显示 lastParseStatus=failed、previousCurrent 和固定错误码，不伪称重新解析成功。空查询仅返回覆盖状态。定位前核对当前解析版本及文本块身份。
+
+SQLite v8 升级前备份 library-before-v8.sqlite3，回填已有当前版本；索引替换与解析版本写入同事务，删除 PDF 级联删除索引。`clear_fulltext_index/rebuild_fulltext_index(document_id=None)` 只清除/重建索引，保留 IR、原文及证据；重开不会自动恢复已主动清除的索引。重建索引不掩盖最近解析失败。解析和搜索由原生桌面受管理的工作线程执行，关闭窗口等待操作结束。
+
+搜索完全本地，不执行 OCR 或模型调用，不处理图片中的不可提取文字。实现依据 [SQLite FTS5 trigram 文档](https://www.sqlite.org/fts5.html#the_trigram_tokenizer)。

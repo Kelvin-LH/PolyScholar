@@ -18,9 +18,10 @@ from .attachments import AttachmentLibrary, ATTACHMENT_SCHEMA
 from .exports import atomic_export
 from .instance import LibraryLock
 from .searches import SearchLibrary, SEARCH_SCHEMA
+from .fulltext import FulltextLibrary, FULLTEXT_SCHEMA, index_current_ir
 from .metadata import BIB_FIELDS, metadata_patch
 
-AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted'})
+AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt'})
 
 MAX_PDF = 100 * 1024 * 1024
 SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeldoc',
@@ -29,7 +30,7 @@ SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeld
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
 
-class LocalStore(SearchLibrary, CollectionLibrary, DocumentIRLibrary, AttachmentLibrary):
+class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLibrary, AttachmentLibrary):
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -52,7 +53,7 @@ class LocalStore(SearchLibrary, CollectionLibrary, DocumentIRLibrary, Attachment
         self.objects.mkdir(exist_ok=True)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version > 7:
+            if version > 8:
                 raise ValueError('本地数据库来自更新版本，请升级应用。')
             if version == 1:
                 backup = self.root / 'library-before-v2.sqlite3'
@@ -114,6 +115,16 @@ class LocalStore(SearchLibrary, CollectionLibrary, DocumentIRLibrary, Attachment
                         target.close()
                     if os.name == 'posix':
                         backup.chmod(0o600)
+            if version in (1, 2, 3, 4, 5, 6, 7):
+                backup = self.root / 'library-before-v8.sqlite3'
+                if not backup.exists():
+                    target = sqlite3.connect(backup)
+                    try:
+                        db.backup(target)
+                    finally:
+                        target.close()
+                    if os.name == 'posix':
+                        backup.chmod(0o600)
             db.executescript('''
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS desktop_documents(id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, data TEXT NOT NULL);
@@ -128,14 +139,17 @@ class LocalStore(SearchLibrary, CollectionLibrary, DocumentIRLibrary, Attachment
                     PRIMARY KEY(document_id,collection_id));
                 CREATE INDEX IF NOT EXISTS desktop_memberships_collection ON desktop_memberships(collection_id);
             ''')
-            db.executescript('BEGIN IMMEDIATE;\n' + IR_SCHEMA + '\n' + ATTACHMENT_SCHEMA + '\n' + SEARCH_SCHEMA)
+            db.executescript('BEGIN IMMEDIATE;\n' + IR_SCHEMA + '\n' + ATTACHMENT_SCHEMA + '\n' + SEARCH_SCHEMA + '\n' + FULLTEXT_SCHEMA)
+            if version < 8:
+                for row in db.execute('SELECT document_id FROM desktop_ir_current').fetchall():
+                    index_current_ir(db, row[0])
             values = ','.join("'"+point+"'" for point in sorted(AUDIT_POINTS))
             for action in ('INSERT', 'UPDATE'):
                 db.execute(f'DROP TRIGGER IF EXISTS desktop_audit_validate_{action.lower()}')
                 db.execute(f"CREATE TRIGGER IF NOT EXISTS desktop_audit_validate_{action.lower()} BEFORE {action} ON desktop_audit "
                            f"WHEN NEW.point NOT IN ({values}) OR NEW.outcome NOT IN ('succeeded','failed') "
                            "BEGIN SELECT RAISE(ABORT, 'Invalid audit event'); END")
-            db.execute('PRAGMA user_version=7')
+            db.execute('PRAGMA user_version=8')
         for job in self.list_jobs():
             if job['state'] in ('queued', 'running'):
                 job.update(state='failed', error='上次退出时任务未完成，请重新提交；远程请求可能已计费。')

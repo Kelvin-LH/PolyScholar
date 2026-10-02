@@ -10,6 +10,7 @@ from polyscholar.app import Window, STYLE
 from polyscholar.service import LocalService
 from polyscholar.ui.creators import CreatorsDialog
 from polyscholar.ui.searches import SearchDialog
+from polyscholar.ui.fulltext import FullTextDialog
 
 
 def main():
@@ -42,6 +43,10 @@ def main():
             app.processEvents(); window.grab().save(str(output / 'searches-python.png'))
             dialog = SearchDialog(query, window); dialog.show(); app.processEvents()
             dialog.grab().save(str(output / 'search-rules-python.png')); dialog.close()
+            service.parse_document(doc['id'])
+            dialog = FullTextDialog(window, {}, '全部文献'); dialog.query.setText('metadata')
+            dialog.show_search(service.search_fulltext('metadata')); dialog.show(); app.processEvents()
+            dialog.grab().save(str(output / 'fulltext-python.png')); dialog.close()
         finally:
             window.close(); service.close()
     print('Synthetic native metadata screenshots saved')

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 import math
 import uuid
+from .fulltext import index_current_ir
 
 MAX_IR_PAGES = 2000
 MAX_IR_BLOCKS = 50000
@@ -137,6 +138,7 @@ class DocumentIRLibrary:
                 for block in page['blocks']:
                     db.execute('INSERT INTO desktop_ir_blocks VALUES(?,?,?,?,?,?,?,?)', (str(uuid.uuid4()), document_id, revision_id, page_id, block['text'], block['kind'], block['order'], json.dumps(block['bbox'], allow_nan=False)))
             db.execute('INSERT INTO desktop_ir_current VALUES(?,?) ON CONFLICT(document_id) DO UPDATE SET revision_id=excluded.revision_id', (document_id, revision_id))
+            index_current_ir(db, document_id, parsed=True)
             db.execute('INSERT INTO desktop_audit(point,outcome,created_at) VALUES(?,?,?)', ('document_parsed', 'succeeded', created_at))
         blocks = [block for page in pages for block in page['blocks']]
         return dict(id=revision_id, documentId=document_id, sha256=source[0], parser=parser, createdAt=created_at,

@@ -58,3 +58,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/smoke_searches.py
+      - name: Check local current-PDF full-text and source navigation
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_fulltext.py
