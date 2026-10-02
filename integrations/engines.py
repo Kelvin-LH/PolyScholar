@@ -14,6 +14,11 @@ import tempfile
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+if __package__:
+    from .managed_process import ProcessCleanupError, WindowsProcess, start_process
+else:
+    from managed_process import ProcessCleanupError, WindowsProcess, start_process
+
 VERSIONS = {'babeldoc': ('babeldoc', '0.6.4'), 'pdfmathtranslate': ('pdf2zh', '1.9.11')}
 
 class EngineError(RuntimeError):
@@ -142,6 +147,9 @@ def check_version(req, env):
 
 
 def stop_process(proc):
+    if isinstance(proc, WindowsProcess):
+        proc.stop()
+        return
     if os.name == 'posix':
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -149,10 +157,11 @@ def stop_process(proc):
             pass
     else:
         subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=5)
         if proc.poll() is None:
             proc.kill()
-    proc.wait()
+    proc.wait(timeout=5)
 
 
 def run(req, api_key):
@@ -161,16 +170,17 @@ def run(req, api_key):
     check_version(req, env)
     source_hash = file_hash(req.source)
     # POSIX modes restrict ordinary same-host users; Windows requires ACL review.
-    with tempfile.TemporaryDirectory(prefix='polyscholar-job-') as temporary:
-        temp = Path(temporary)
+    temp = Path(tempfile.mkdtemp(prefix='polyscholar-job-'))
+    cleanup_safe = True
+    output_created = False
+    succeeded = False
+    try:
         config = private_config(req, temp, api_key)
         req.output.mkdir(parents=True, exist_ok=False, mode=0o700)
-        succeeded = False
+        output_created = True
+        proc = start_process(command(req, config), cwd=temp, env=env,
+                             start_new_session=(os.name == 'posix'))
         try:
-            proc = subprocess.Popen(command(req, config), cwd=temp, env=env,
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL,
-                                    start_new_session=(os.name == 'posix'))
             try:
                 result = proc.wait(timeout=req.timeout)
             except subprocess.TimeoutExpired:
@@ -179,32 +189,45 @@ def run(req, api_key):
             except KeyboardInterrupt:
                 stop_process(proc)
                 raise EngineError('cancelled', 'Engine interrupted; remote requests may still be billed') from None
-            if result:
-                raise EngineError('engine_failed', 'Engine failed; raw engine logs are suppressed to avoid exposing private data')
-            if file_hash(req.source) != source_hash:
-                raise EngineError('source_changed', 'Source PDF changed during execution')
-            outputs = sorted(req.output.glob('*.pdf'))
-            if not outputs or any(p.is_symlink() or not pdf_header(p) for p in outputs):
-                raise EngineError('invalid_output', 'Engine did not produce valid PDF output headers')
-            manifest = {'project': 'PolyScholar', 'engine': req.engine,
-                    'engine_version': VERSIONS[req.engine][1], 'model': req.model,
-                    'source_sha256': source_hash, 'source_language': req.source_language,
-                    'target_language': req.target_language, 'pages': req.pages or 'all',
-                    'license': 'AGPL-3.0-only', 'signed': False,
-                    'outputs': {p.name: file_hash(p) for p in outputs},
-                    'cost': None, 'usage': None, 'quality_verified': False}
-            (req.output / 'polyscholar-export.json').write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-            succeeded = True
-            return manifest
-        except OSError:
-            raise EngineError('io_error', 'Local engine or file operation failed') from None
         finally:
-            if not succeeded:
-                if req.output.is_symlink():
-                    req.output.unlink(missing_ok=True)
-                elif req.output.is_dir():
-                    shutil.rmtree(req.output)
+            if isinstance(proc, WindowsProcess):
+                # 后代退出后才读取产物或回收配置。Stop descendants before cleanup.
+                stop_process(proc)
+        if result:
+            raise EngineError('engine_failed', 'Engine failed; raw engine logs are suppressed to avoid exposing private data')
+        if file_hash(req.source) != source_hash:
+            raise EngineError('source_changed', 'Source PDF changed during execution')
+        outputs = sorted(req.output.glob('*.pdf'))
+        if not outputs or any(p.is_symlink() or not pdf_header(p) for p in outputs):
+            raise EngineError('invalid_output', 'Engine did not produce valid PDF output headers')
+        manifest = {'project': 'PolyScholar', 'engine': req.engine,
+                'engine_version': VERSIONS[req.engine][1], 'model': req.model,
+                'source_sha256': source_hash, 'source_language': req.source_language,
+                'target_language': req.target_language, 'pages': req.pages or 'all',
+                'license': 'AGPL-3.0-only', 'signed': False,
+                'outputs': {p.name: file_hash(p) for p in outputs},
+                'cost': None, 'usage': None, 'quality_verified': False}
+        (req.output / 'polyscholar-export.json').write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        succeeded = True
+        return manifest
+    except ProcessCleanupError:
+        cleanup_safe = False
+        raise EngineError('io_error', 'Engine process-tree exit was not confirmed') from None
+    except OSError:
+        raise EngineError('io_error', 'Local engine or file operation failed') from None
+    finally:
+        # 终止未确认时保留文件，避免活引擎继续读写已回收目录。
+        # Preserve files when tree exit is unproven; recovery remains a separate gate.
+        if cleanup_safe:
+            try:
+                if output_created and not succeeded:
+                    if req.output.is_symlink():
+                        req.output.unlink(missing_ok=True)
+                    elif req.output.is_dir():
+                        shutil.rmtree(req.output)
+            finally:
+                shutil.rmtree(temp)
 
 
 def main():

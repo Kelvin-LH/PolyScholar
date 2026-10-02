@@ -19,6 +19,7 @@ from .citation_import import CitationImporter
 from .zotero_migration import ZoteroMigrationImporter
 from .summary_model import selected_blocks, request_summary
 from integrations.engines import VERSIONS, limited_environment
+from integrations.managed_process import WindowsProcess, start_process
 
 MAX_EVENT = 1024 * 1024
 ERROR_CODES = {'invalid_request','engine_unavailable','engine_failed','timeout','cancelled','source_changed','invalid_output','io_error','internal_error','protocol_error'}
@@ -547,8 +548,12 @@ class LocalService:
             with self._lock:
                 if self._closed:
                     raise ValueError()
-                child = subprocess.Popen([payload['python'], '-I', str(worker)], env=environment(),
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                # 冻结模块不是真实脚本目录；use the bundled resource copy.
+                gate = (self.resources / 'integrations/process_gate.py'
+                        if getattr(sys, 'frozen', False) else None)
+                child = start_process([payload['python'], '-I', str(worker)], env=environment(),
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    gate_path=gate)
                 self._children[job['id']] = child
             request = json.dumps(payload, ensure_ascii=False).encode() + b'\n'
             if len(request) > MAX_EVENT:
@@ -598,7 +603,14 @@ class LocalService:
                 try:
                     self._stop(child)
                 except (OSError, subprocess.TimeoutExpired):
-                    pass
+                    # 未确认退出不能记为成功。Do not publish success on cleanup failure.
+                    job.update(state='failed', errorCode='io_error',
+                               error='翻译进程清理未能确认完成，请关闭应用后重试。')
+                if child.stdin and not child.stdin.closed:
+                    try:
+                        child.stdin.close()
+                    except OSError:
+                        pass  # The worker may already have closed its request pipe.
                 if child.stdout:
                     child.stdout.close()
             # Retain the thread until all database writes close, so shutdown can join it.
@@ -615,6 +627,9 @@ class LocalService:
 
     @staticmethod
     def _stop(child):
+        if isinstance(child, WindowsProcess):
+            child.stop()
+            return
         if child.poll() is not None:
             return
         try:
