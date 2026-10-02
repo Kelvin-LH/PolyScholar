@@ -147,7 +147,7 @@ class ReviewTests(unittest.TestCase):
         try:
             self.assertTrue((reopened.root/'library-before-v3.sqlite3').exists())
             with reopened.connection() as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],9)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],10)
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM desktop_audit WHERE point='legacy_event'").fetchone()[0],1)
                 with self.assertRaises(sqlite3.IntegrityError):
                     db.execute("UPDATE desktop_audit SET outcome='typo' WHERE point='document_imported'")

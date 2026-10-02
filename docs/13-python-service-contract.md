@@ -120,3 +120,14 @@ SQLite v8 升级前备份 library-before-v8.sqlite3，回填已有当前版本�
 SQLite 与文件系统不能共同原子提交。返回 cleanupComplete=False 表示数据库已永久删除、仍有待清理文件，不能恢复条目，也不能显示清理成功。`list_pending_cleanup()` 和 `retry_cleanup(cleanup_id=None)` 支持重启后逐项或全部重试；固定 cleanup_failed 错误码不含原始日志。清理计划保存路径、文件/目录及父目录身份和原先是否存在，每次重试核对，拒绝链接和路径替换；重新导入后仍被数据库引用的对象保留。待清理路径继续受导出防覆盖保护。
 
 v9 升级前备份 library-before-v9.sqlite3；回收标记、队列、审计触发器及版本号同事务迁移。原生回收站与全文检索复用 ManagedIODialog 和主窗口 IO 生命周期，没有额外线程管理器。此功能不自动清空回收站，不代替安装包或真实翻译验收。
+
+
+## 重复候选与人工书目合并（v10）
+
+`list_duplicate_candidates(limit=200)` 只读取活动根条目的候选字段，返回 items/documentIds/reasons、精确 total 和 truncated。相同类型内：规范 DOI 相同、格式/校验位有效的 ISBN 相同，或规范标题相同且完整作者身份相同、已知年份相差不超过1年。ISBN-10 转为对应978 ISBN-13；13位限定978/979。不是文件哈希去重，也不证明同一作品，不能自动合并。候选检测不联网；上限为20000根条目、64MiB候选字段、200000作者索引项、100000对和30秒检查预算，超过明确失败，不返回虚假的截断总数。ISBN格式依据 [International ISBN Agency](https://www.isbn-international.org/index.php/node/10)，不联网核查发行注册真实性。
+
+`merge_preview(document_ids,master_id=None)` 接受2–20个不同、相同类型的活动根条目，返回规范元数据、逐字段来源选项、关联数量、activeJobs及revision。手动选择不依赖候选算法；不能把子附件当书目主项。预览最多2000个家族PDF，读取事务内逐行计算关联状态摘要；IR原文不复制进历史快照。
+
+`merge_documents(document_ids,master_id,field_sources,expected_revision)` 要求当前预览摘要匹配，拒绝关联漂移、活动任务及实际在途解析/摘要/翻译。字段来源只能取所选条目；未指定沿用主条目，日期/年份冲突拒绝。主PDF不换；其他原主PDF作为明确标注的补充附件，其既有子附件迁移至主条目。原PDF、任务、产物、IR、摘要、证据和外部来源路径保持独立身份；子附件回收标记保留。集合和标签取并集；所选主条目的不同笔记带来源ID合并，超出既有字段上限则拒绝，不截断。内部 mergeNoteSources 保存贡献列表；只有当前笔记仍逐字等于受控格式化结果才复用贡献，多轮合并不再次嵌套来源标题；人工修改后的笔记按新的真实原文保留，不猜测文本头部。
+
+SQLite v10 升级前备份 library-before-v10.sqlite3。关系迁移、主书目更新、合并前书目/关系快照与固定 documents_merged 审计同事务，不删除文件。`list_merge_history(master_id)` 供本地查看历史，快照不作为自动撤销接口；合并不可自动撤销。显式永久删除所属文献才级联清除历史。外部已导出的引用不自动改写，不宣称 Zotero Word 插件等价。

@@ -6,6 +6,7 @@ from .creators import CreatorsDialog
 from .searches import SearchDialog
 from .fulltext import FullTextDialog
 from .trash import TrashDialog, TrashMoveOperation
+from .duplicates import DuplicatesDialog
 from copy import deepcopy
 from ..metadata import APPLICABLE, legacy_creators, creator_display
 
@@ -28,7 +29,7 @@ class LibraryPage:
         controls=QHBoxLayout();self.collection_edit_button=self.button('编辑',self.edit_collection);self.collection_delete_button=self.button('删除',self.remove_collection);controls.addWidget(self.collection_edit_button);controls.addWidget(self.collection_delete_button);ol.addLayout(controls)
         self.include_children=QCheckBox('包含子集合');self.include_children.toggled.connect(self.filter_docs);ol.addWidget(self.include_children)
         ol.addWidget(QLabel('标签（可多选）'));self.tag_filter=QListWidget();self.tag_filter.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection);self.tag_filter.setMaximumHeight(160);self.tag_filter.itemSelectionChanged.connect(self.filter_docs);ol.addWidget(self.tag_filter)
-        tag_actions=QHBoxLayout();tag_actions.addWidget(self.button('重命名',self.rename_selected_tag));tag_actions.addWidget(self.button('删除标签',self.remove_selected_tag));ol.addLayout(tag_actions);ol.addWidget(self.button('清除筛选',self.clear_filters));self.trash_button=self.button('回收站',self.open_trash);ol.addWidget(self.trash_button)
+        tag_actions=QHBoxLayout();tag_actions.addWidget(self.button('重命名',self.rename_selected_tag));tag_actions.addWidget(self.button('删除标签',self.remove_selected_tag));ol.addLayout(tag_actions);ol.addWidget(self.button('清除筛选',self.clear_filters));self.trash_button=self.button('回收站',self.open_trash);ol.addWidget(self.trash_button);self.duplicates_button=self.button('重复候选 / 合并',self.open_duplicates);ol.addWidget(self.duplicates_button)
         split.addWidget(organize)
         self.document_list=QListWidget();self.document_list.setMinimumWidth(160);self.document_list.currentRowChanged.connect(self.select_doc);split.addWidget(self.document_list)
         inspector=QWidget();inspector.setMinimumWidth(280);f=QFormLayout(inspector);self.metadata_form=f;self.fields={};self._metadata_creators=[];self._authors_loaded=''
@@ -294,6 +295,19 @@ class LibraryPage:
         dialog=CreatorsDialog(creators,self)
         if dialog.exec()==QDialog.DialogCode.Accepted:
             self._metadata_creators=dialog.creators();self._authors_loaded='; '.join(creator_display(c) for c in self._metadata_creators if c['role']=='author');self.fields['authors'].setText(self._authors_loaded);self.update_creator_info()
+
+    def open_duplicates(self):
+        if self.io_worker is not None or self._closing:
+            return
+        if hasattr(self,'duplicates_dialog') and not self.duplicates_dialog._closed:
+            self.duplicates_dialog.show()
+            self.duplicates_dialog.raise_()
+            self.duplicates_dialog.activateWindow()
+            self.duplicates_dialog.refresh()
+            return
+        self.duplicates_dialog=DuplicatesDialog(self)
+        self.duplicates_dialog.show()
+        self.duplicates_dialog.refresh()
 
     def open_trash(self):
         if self.io_worker is not None or self._closing:

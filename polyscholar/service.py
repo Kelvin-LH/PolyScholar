@@ -309,7 +309,7 @@ class LocalService:
         return self.store.update_document(document_id, patch)
 
     def _require_idle_workers(self, document_id):
-        scope = set(self.store.deletion_preview(document_id)['documentIds'])
+        scope = set(self.store.document_family_ids(document_id))
         jobs = {job['id']: job['documentId'] for job in self.store.list_jobs()}
         if any(thread.is_alive() and jobs.get(key) in scope for key, thread in self._threads.items()):
             raise ValueError('请等待翻译任务完全结束后操作。')
@@ -317,6 +317,26 @@ class LocalService:
                and self._children[key].poll() is None
                for key, identifier in self._child_documents.items()):
             raise ValueError('请等待文献解析或摘要任务结束后操作。')
+
+    def list_duplicate_candidates(self, limit=200):
+        return self.store.list_duplicate_candidates(limit)
+
+    def merge_preview(self, document_ids, master_id=None):
+        master_id = self.store.validate_merge_selection(document_ids, master_id)
+        with self._lock:
+            for identifier in document_ids if isinstance(document_ids, list) else []:
+                self._require_idle_workers(identifier)
+            return self.store.merge_preview(document_ids, master_id)
+
+    def merge_documents(self, document_ids, master_id, field_sources, expected_revision):
+        master_id = self.store.validate_merge_selection(document_ids, master_id)
+        with self._lock:
+            for identifier in document_ids if isinstance(document_ids, list) else []:
+                self._require_idle_workers(identifier)
+            return self.store.merge_documents(document_ids, master_id, field_sources, expected_revision)
+
+    def list_merge_history(self, master_id):
+        return self.store.list_merge_history(master_id)
 
     def trash_document(self, document_id):
         with self._lock:

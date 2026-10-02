@@ -66,3 +66,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/smoke_trash.py
+      - name: Check duplicate review and explicit bibliographic merging
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_duplicates.py
