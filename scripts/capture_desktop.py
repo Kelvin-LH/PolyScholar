@@ -29,6 +29,11 @@ def main():
             window.show();app.processEvents();window.document_list.setCurrentRow(0)
             app.processEvents();window.grab().save(str(args.output/'library-python.png'))
             window.nav.setCurrentRow(5);app.processEvents();window.grab().save(str(args.output/'settings-python.png'))
+            service.parse_document(doc['id'])
+            block=service.document_blocks(doc['id'])[0]
+            service.save_claim(doc['id'],'合成 PDF 的本地证据笔记。',[{'blockId':block['id'],'quote':block['text']}])
+            window.nav.setCurrentRow(3);window.evidence_doc.setCurrentIndex(window.evidence_doc.findData(doc['id']));window.load_evidence()
+            window.evidence_claims.setCurrentRow(0);app.processEvents();window.grab().save(str(args.output/'evidence-python.png'))
             window.resize(1024,700);window.nav.setCurrentRow(0);app.processEvents();window.grab().save(str(args.output/'library-1024.png'))
         finally:
             window.close();service.close()

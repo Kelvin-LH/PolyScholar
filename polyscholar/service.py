@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import threading
+import uuid
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from .store import LocalStore
@@ -109,6 +110,69 @@ class LocalService:
 
     def list_documents(self):
         return self.store.list_documents()
+
+    def parse_document(self, document_id):
+        document = self.store.document(document_id)
+        worker = self.resources / 'integrations/parse_worker.py'
+        if not worker.is_file():
+            raise ValueError('安装包缺少本地文献解析组件。')
+        if getattr(sys, 'frozen', False):
+            runtime = self.resources / 'runtime/babeldoc'
+            python = runtime / ('python.exe' if os.name == 'nt' else 'bin/python3')
+        else:
+            python = Path(sys.executable)
+        if not python.is_file():
+            raise ValueError('内置文献解析运行环境缺失。')
+        identifier = 'parse-' + str(uuid.uuid4())
+        child = None
+        try:
+            with self._lock:
+                if self._closed:
+                    raise ValueError('应用正在关闭。')
+                child = subprocess.Popen([str(python), '-I', str(worker)], env=environment(),
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                self._children[identifier] = child
+            request = json.dumps({'source': str(self.store.object_path(document)), 'sha256': document['sha256']}).encode('utf-8')
+            raw, _ = child.communicate(request+b'\n', timeout=120)
+            if child.returncode or len(raw) > 16*1024*1024+1:
+                raise ValueError('文献解析失败或超过安全大小限制。')
+            result = json.loads(raw)
+            messages = {'encrypted_pdf':'此 PDF 已加密，请先在本地解锁后导入。',
+                'parse_limit':'文献内容超过当前解析限制，未保存截断结果。',
+                'parser_unavailable':'内置文献解析组件版本不匹配。',
+                'source_changed':'库内原文发生变化，请重新导入。'}
+            if result.get('ok') is not True:
+                raise ValueError(messages.get(result.get('code'),'未能解析此 PDF，原文件未修改。'))
+            if result.get('sha256') != document['sha256']:
+                raise ValueError('解析结果与库内原文不匹配。')
+            with self._lock:
+                if self._closed:
+                    raise ValueError('应用正在关闭，解析结果未保存。')
+                return self.store.replace_document_ir(document_id, result['parser'], result['pages'])
+        except subprocess.TimeoutExpired:
+            raise ValueError('本地解析超时，结果未保存。') from None
+        except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, AttributeError):
+            raise ValueError('本地文献解析失败，请检查文件或内置运行环境。') from None
+        finally:
+            if child:
+                self._stop(child)
+                for stream in (child.stdin, child.stdout):
+                    if stream and not stream.closed:
+                        stream.close()
+            with self._lock:
+                self._children.pop(identifier, None)
+
+    def current_document_ir(self, document_id):
+        return self.store.current_document_ir(document_id)
+
+    def document_blocks(self, document_id, revision_id=None):
+        return self.store.document_blocks(document_id, revision_id)
+
+    def save_claim(self, document_id, text, evidence):
+        return self.store.save_claim(document_id, text, evidence)
+
+    def list_claims(self, document_id):
+        return self.store.list_claims(document_id)
 
     def list_collections(self):
         return self.store.list_collections()

@@ -13,10 +13,11 @@ import threading
 from urllib.parse import urlsplit
 import uuid
 from .library import CollectionLibrary, normalize_tags
+from .document_ir import DocumentIRLibrary, IR_SCHEMA
 from .exports import atomic_export
 from .instance import LibraryLock
 
-AUDIT_POINTS = frozenset({'document_imported','document_deleted','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported'})
+AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported'})
 
 MAX_PDF = 100 * 1024 * 1024
 SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeldoc',
@@ -25,7 +26,7 @@ SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeld
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
 
-class LocalStore(CollectionLibrary):
+class LocalStore(CollectionLibrary, DocumentIRLibrary):
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -48,7 +49,7 @@ class LocalStore(CollectionLibrary):
         self.objects.mkdir(exist_ok=True)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version > 3:
+            if version > 4:
                 raise ValueError('本地数据库来自更新版本，请升级应用。')
             if version == 1:
                 backup = self.root / 'library-before-v2.sqlite3'
@@ -70,6 +71,16 @@ class LocalStore(CollectionLibrary):
                         target.close()
                     if os.name == 'posix':
                         backup.chmod(0o600)
+            if version in (1, 2, 3):
+                backup = self.root / 'library-before-v4.sqlite3'
+                if not backup.exists():
+                    target = sqlite3.connect(backup)
+                    try:
+                        db.backup(target)
+                    finally:
+                        target.close()
+                    if os.name == 'posix':
+                        backup.chmod(0o600)
             db.executescript('''
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS desktop_documents(id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, data TEXT NOT NULL);
@@ -83,11 +94,13 @@ class LocalStore(CollectionLibrary):
                     collection_id TEXT NOT NULL REFERENCES desktop_collections(id) ON DELETE CASCADE,
                     PRIMARY KEY(document_id,collection_id));
                 CREATE INDEX IF NOT EXISTS desktop_memberships_collection ON desktop_memberships(collection_id);
-                PRAGMA user_version=3;
             ''')
+            db.executescript('BEGIN IMMEDIATE;\n' + IR_SCHEMA + '\nPRAGMA user_version=4;\nCOMMIT;')
         values = ','.join("'"+point+"'" for point in sorted(AUDIT_POINTS))
         with self.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
             for action in ('INSERT', 'UPDATE'):
+                db.execute(f'DROP TRIGGER IF EXISTS desktop_audit_validate_{action.lower()}')
                 db.execute(f"CREATE TRIGGER IF NOT EXISTS desktop_audit_validate_{action.lower()} BEFORE {action} ON desktop_audit "
                            f"WHEN NEW.point NOT IN ({values}) OR NEW.outcome NOT IN ('succeeded','failed') "
                            "BEGIN SELECT RAISE(ABORT, 'Invalid audit event'); END")

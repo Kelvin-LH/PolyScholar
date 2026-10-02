@@ -67,6 +67,8 @@ def verify(runtime, engine, work):
             'assert sys.version_info[:2]==(3,12); '
             'assert importlib.metadata.version(' + repr(package) + ')=='+repr(expected)+'; '
             'print(sys.version.split()[0])')
+    if engine == 'babeldoc':
+        code += "; assert importlib.metadata.version('PyMuPDF')=='1.28.2'"
     subprocess.run([str(py), '-I', '-c', code], env=env, cwd=work, check=True, timeout=30)
     subprocess.run([str(py), '-I', '-m', module, '--version'], env=env, cwd=work,
                    check=True, timeout=90)

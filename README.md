@@ -24,6 +24,7 @@
 - **本地文献库**：集合与子集合、PDF 导入、文件去重、标签筛选与笔记，文献管理对标 Zotero。
 - **双引擎翻译**：集成 [BabelDOC](https://github.com/funstory-ai/BabelDOC) 与 [PDFMathTranslate](https://github.com/PDFMathTranslate/PDFMathTranslate)，原文与译文分开保存。
 - **双语阅读**：原文与译文并排显示，在桌面内完成阅读。
+- **证据笔记**：本地提取文本、引用原文并跳转页码，重新解析后提示旧引用失效。
 - **自选模型**：支持 DeepSeek 等兼容 API，自动获取可用模型，也可手动填写。
 - **文件导出**：导出译文 PDF，以及 BibTeX、RIS、CSL-JSON 文献元数据。
 - **个人桌面**：Python + PySide6 + SQLite，无需服务器或账户。发行包自带 Python，缓存目录可调整。
@@ -65,6 +66,8 @@ Python / PySide6 原型，使用合成测试 PDF。
 ![原生文献库](design/screenshots/library-python.png)
 
 ![原生设置](design/screenshots/settings-python.png)
+
+![原生证据笔记](design/screenshots/evidence-python.png)
 
 </details>
 

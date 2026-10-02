@@ -45,7 +45,7 @@ class Window(LibraryPage, ReaderPage, TasksPage, SummaryPage, CitationsPage, Set
         root=QWidget(); row=QHBoxLayout(root); row.setContentsMargins(0,0,0,0); row.setSpacing(0)
         side=QWidget(); side.setObjectName('sidebar'); side.setFixedWidth(240); sl=QVBoxLayout(side);sl.setContentsMargins(20,30,20,25)
         brand=QLabel('PolyScholar 研译');brand.setObjectName('brand');sl.addWidget(brand);sl.addSpacing(24)
-        self.nav=QListWidget();self.nav.addItems(['文献库','双语阅读','翻译任务','证据摘要','引用导出','设置']);sl.addWidget(self.nav)
+        self.nav=QListWidget();self.nav.addItems(['文献库','双语阅读','翻译任务','证据笔记','引用导出','设置']);sl.addWidget(self.nav)
         self.stack=QStackedWidget(); row.addWidget(side); row.addWidget(self.stack,1);self.setCentralWidget(root)
         self.library();self.reader();self.tasks();self.summary();self.citations();self.settings()
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex);self.nav.setCurrentRow(0)
@@ -72,7 +72,7 @@ class Window(LibraryPage, ReaderPage, TasksPage, SummaryPage, CitationsPage, Set
         for d in self.docs:self.task_doc.addItem(d['title'],d['id'])
         index=self.task_doc.findData(previous)
         if index>=0:self.task_doc.setCurrentIndex(index)
-        self.refresh_jobs();self.refresh_citation_items()
+        self.refresh_jobs();self.refresh_citation_items();self.refresh_summary_items()
 
     def on_job_changed(self,event):
         if not self._closing:self.refresh_jobs()
@@ -82,6 +82,7 @@ class Window(LibraryPage, ReaderPage, TasksPage, SummaryPage, CitationsPage, Set
         self.io_status.setText(message)
         for button in (self.import_button,self.read_button,self.reader_result):button.setEnabled(False)
         worker=IOWorker(work,self);self.io_worker=worker
+        self.update_evidence_controls()
         worker.ready.connect(lambda value:self.guard(lambda:ready(value)) if not self._closing else None,Qt.ConnectionType.QueuedConnection)
         worker.failed.connect(lambda message:QMessageBox.warning(self,'操作未完成',message) if not self._closing else None,Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(self.io_finished,Qt.ConnectionType.QueuedConnection);worker.start()
@@ -91,6 +92,7 @@ class Window(LibraryPage, ReaderPage, TasksPage, SummaryPage, CitationsPage, Set
         if worker:worker.deleteLater()
         self.io_status.setText('')
         for button in (self.import_button,self.read_button,self.reader_result):button.setEnabled(True)
+        self.update_evidence_controls()
         if self._closing:self.close()
 
     def closeEvent(self,event:QCloseEvent):

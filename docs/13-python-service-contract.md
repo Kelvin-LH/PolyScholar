@@ -46,3 +46,11 @@
 - `diagnostic_report()` 只包含版本、平台、引擎/状态、允许的错误码与超时；不含路径、文献、密钥、端点或原始日志。用户预览后可 `export_diagnostics(path)` 保存本机，无自动上报。
 - 导出经临时文件和原子替换完成，保护原始导入文件、内部文献库/资源/译文及其硬链接；异常统一为本地可理解文案。
 - SQLite v3 升级前备份，审计新写入由枚举和触发器校验，保留旧历史。
+
+## DocumentIR 与证据笔记（v4）
+
+`parse_document(id)` 在有界本地子进程中提取真实 PDF 原生文字，保存新解析版本；不调用模型、不执行 OCR。源码运行安装 PyMuPDF 1.28.2；冻结发行使用包内受控 CPython，不退回系统解释器。
+
+`current_document_ir(id)`、`document_blocks(id, revision_id=None)` 返回实际版本、页码、文本及可见页面坐标。`save_claim(id, text, evidence)` 校验逐字摘录和文献/版本关系；`list_claims(id)` 返回关联/无证据及 stale 状态。重新解析不复用旧块 ID，也不将旧摘录自动绑定新版本。v4 升级前保存 `library-before-v4.sqlite3`。
+
+本地人工笔记不等于模型摘要，不判定科学结论真伪。解析版本/页面/块/结论/证据采用关系表与组合外键，文献基础元数据仍部分使用 JSON。

@@ -42,7 +42,7 @@ flowchart TD
 
 ## 领域与数据
 
-以下为目标领域模型。当前运行时 SQLite v3 与未来 DocumentIR 参考设计的差异见 [数据模型状态](../schemas/README.md)；块级证据与摘要尚未实现。
+以下为目标领域模型。当前运行时 SQLite v4 与未来 DocumentIR 参考设计的差异见 [数据模型状态](../schemas/README.md)；块级来源关联与人工证据笔记已接入，模型摘要尚未实现。
 
 library 负责集合/子集合、多集合成员、类型化条目/作者、标签、附件、笔记、检索和恢复；逐步对标 [Zotero 矩阵](12-zotero-parity.md)。基础 PDF 列表不是完整文献管理。
 

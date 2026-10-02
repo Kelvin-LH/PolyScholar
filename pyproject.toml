@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Personal local-first academic PDF translation and reading desktop application"
 requires-python = ">=3.12"
 license = "AGPL-3.0-only"
-dependencies = ["PySide6==6.11.2"]
+dependencies = ["PySide6==6.11.2", "PyMuPDF==1.28.2"]
 
 [project.optional-dependencies]
 build = ["PyInstaller==6.19.0"]

@@ -10,6 +10,7 @@
 | 旧 BabelDOC 传递依赖 | pdf2zh 环境解析得到的 0.2.x | 由 pdf2zh 固定的上游范围决定；不与独立 0.6.4 环境混装 |
 | CPython / python-build-standalone | 3.12.14 / 20260929 | [官方发行](https://github.com/astral-sh/python-build-standalone/releases/tag/20260929)，保留独立 tree 自带 CPython 与内置第三方许可；固定资产 SHA-256 见 scripts/prepare_runtime.py |
 | PySide6 / Shiboken6 / Qt | 6.11.2 | [PySide6 对应源码](https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.11.2-src/)，本项目使用开源许可路径；LGPL-3.0/GPL-3.0 与各文件许可适用，许可副本见 licenses/desktop/ |
+| PyMuPDF / MuPDF | 1.28.2 | [对应源码与许可](https://github.com/pymupdf/PyMuPDF/tree/1.28.2)，采用 AGPL 开源许可；副本 licenses/desktop/PyMuPDF-1.28.2-COPYING.txt；本地文本解析，不调用 OCR 或模型 |
 | PyInstaller | 6.19.0 | [官方许可](https://pyinstaller.org/en/v6.19.0/license.html)，GPL-2.0 附打包例外，部分文件 Apache-2.0；副本 licenses/desktop/PyInstaller-6.19.0-COPYING.txt |
 
 本仓库包含原创 CLI 适配层、上游许可副本与版本要求，不将上游引擎源代码复制入原创目录。当前要求文件只固定顶层版本，不是完整哈希锁文件；所有传递依赖、模型和字体均需在发行包前完成 SBOM/许可/版本及来源校验。安装时依赖可能更新，所以不能将“顶层固定”宣传为可重复发行构建。

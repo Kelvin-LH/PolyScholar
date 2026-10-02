@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
+from PySide6.QtCore import QPointF, QTimer
 from PySide6.QtWidgets import QLabel, QComboBox, QSplitter
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
@@ -7,11 +8,13 @@ class ReaderPage:
     def reader(self):
         l=self.page('双语阅读','原文与翻译结果并排阅读；段落对齐和图中文字注释仍在研发。')
         self.pdf_title=QLabel('请在文献库中选择文献并点击“阅读文献”。');l.addWidget(self.pdf_title)
-        self.reader_document=None;self.reader_result=QComboBox();self.reader_result.addItem('仅阅读原文',None);self.reader_result.currentIndexChanged.connect(self.load_reader);l.addWidget(self.reader_result)
+        self._reader_evidence=None;self.reader_document=None;self.reader_result=QComboBox();self.reader_result.addItem('仅阅读原文',None);self.reader_result.currentIndexChanged.connect(self.load_reader);l.addWidget(self.reader_result)
         split=QSplitter();self.pdf_docs=[];self.pdf_views=[]
         for _ in range(2):
             pdf=QPdfDocument(self);view=QPdfView();view.setDocument(pdf);view.setPageMode(QPdfView.PageMode.MultiPage);view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
             self.pdf_docs.append(pdf);self.pdf_views.append(view);split.addWidget(view)
+        self._evidence_timer=QTimer(self);self._evidence_timer.setSingleShot(True);self._evidence_timer.timeout.connect(self.locate_loaded_evidence)
+        self.pdf_docs[0].statusChanged.connect(lambda status:self._evidence_timer.start(0))
         l.addWidget(split,1)
 
     def refresh_reader_choices(self):
@@ -35,8 +38,32 @@ class ReaderPage:
             self.reader_document=document;self.refresh_reader_choices()
         self.load_reader()
 
-    def load_reader(self,*args):
+    def open_evidence(self,block):
+        if self.io_worker is not None or self._closing:return
+        def open_block():
+            self.reader_document=self.service.store.document(block['documentId'])
+            self.refresh_reader_choices()
+            self.reader_result.blockSignals(True);self.reader_result.setCurrentIndex(0);self.reader_result.blockSignals(False)
+            self.load_reader(evidence=block)
+        self.guard(open_block)
+
+    def locate_loaded_evidence(self,*args):
+        block=self._reader_evidence
+        pdf=self.pdf_docs[0]
+        if not block or pdf.status()!=QPdfDocument.Status.Ready:return
+        page=block['pageNumber']-1
+        if not 0<=page<pdf.pageCount():return
+        size=pdf.pagePointSize(page);bbox=block['bbox']
+        # Parser boxes use visible rotated/cropped page coordinates normalized to 0..1.
+        # Qt PDF navigation uses points in this same visible page, with a top-left origin.
+        center=QPointF((bbox[0]+bbox[2])*0.5*size.width(),(bbox[1]+bbox[3])*0.5*size.height())
+        self.pdf_views[0].pageNavigator().jump(page,center,0)
+        self._reader_evidence=None
+
+    def load_reader(self,*args,evidence=None):
         if self.io_worker is not None or not self.reader_document:return
+        self._reader_evidence=evidence
+        self.pdf_views[0].setPageMode(QPdfView.PageMode.SinglePage if evidence else QPdfView.PageMode.MultiPage)
         document=self.reader_document.copy();artifact=self.reader_result.currentData()
         def work():
             source=self.service.read_pdf(document['id'])
@@ -52,5 +79,6 @@ class ReaderPage:
                 buffer=QBuffer(self);buffer.setData(QByteArray(raw));buffer.open(QIODevice.OpenModeFlag.ReadOnly)
                 self.buffers.append(buffer);self.pdf_docs[index].load(buffer)
             self.pdf_title.setText(document['title']);self.nav.setCurrentRow(1)
+            self._evidence_timer.start(0)
         self.run_io(work,ready,'正在载入阅读文件…')
 
