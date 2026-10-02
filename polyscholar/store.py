@@ -12,7 +12,7 @@ import stat
 import threading
 from urllib.parse import urlsplit
 import uuid
-from .library import CollectionLibrary, normalize_tags
+from .library import CollectionLibrary
 from .document_ir import DocumentIRLibrary, IR_SCHEMA
 from .attachments import AttachmentLibrary, ATTACHMENT_SCHEMA
 from .exports import atomic_export
@@ -21,9 +21,9 @@ from .searches import SearchLibrary, SEARCH_SCHEMA
 from .fulltext import FulltextLibrary, FULLTEXT_SCHEMA, index_current_ir
 from .trash import TrashLibrary, TRASH_SCHEMA
 from .duplicates import DuplicateLibrary, MERGE_SCHEMA
-from .metadata import BIB_FIELDS, metadata_patch
+from .bibliographic import BibliographicPolicy
 
-AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt','document_trashed','document_restored','purge_cleanup','documents_merged'})
+AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt','document_trashed','document_restored','purge_cleanup','documents_merged','bibliographic_created','primary_pdf_changed'})
 
 MAX_PDF = 100 * 1024 * 1024
 SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeldoc',
@@ -55,7 +55,7 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
         self.objects.mkdir(exist_ok=True)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version > 10:
+            if version > 11:
                 raise ValueError('本地数据库来自更新版本，请升级应用。')
             if version == 1:
                 backup = self.root / 'library-before-v2.sqlite3'
@@ -147,9 +147,24 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
                         target.close()
                     if os.name == 'posix':
                         backup.chmod(0o600)
-            db.executescript('''
-                PRAGMA journal_mode=WAL;
-                CREATE TABLE IF NOT EXISTS desktop_documents(id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, data TEXT NOT NULL);
+            if version in range(1, 11):
+                backup = self.root / 'library-before-v11.sqlite3'
+                if not backup.exists():
+                    target = sqlite3.connect(backup)
+                    try:
+                        db.backup(target)
+                    finally:
+                        target.close()
+                    if os.name == 'posix':
+                        backup.chmod(0o600)
+            db.execute('PRAGMA journal_mode=WAL')
+            db.execute('PRAGMA foreign_keys=OFF')
+            db.execute('PRAGMA legacy_alter_table=ON')
+            migration = ''
+            if version in range(1, 11):
+                migration = self._fileless_migration_sql(db)
+            foundation = '''
+                CREATE TABLE IF NOT EXISTS desktop_documents(id TEXT PRIMARY KEY, sha256 TEXT, data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS desktop_settings(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS desktop_jobs(id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES desktop_documents(id), state TEXT NOT NULL, data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS desktop_audit(sequence INTEGER PRIMARY KEY AUTOINCREMENT, point TEXT NOT NULL, outcome TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -160,8 +175,8 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
                     collection_id TEXT NOT NULL REFERENCES desktop_collections(id) ON DELETE CASCADE,
                     PRIMARY KEY(document_id,collection_id));
                 CREATE INDEX IF NOT EXISTS desktop_memberships_collection ON desktop_memberships(collection_id);
-            ''')
-            db.executescript('BEGIN IMMEDIATE;\n' + IR_SCHEMA + '\n' + ATTACHMENT_SCHEMA + '\n' + SEARCH_SCHEMA + '\n' + FULLTEXT_SCHEMA + '\n' + TRASH_SCHEMA + '\n' + MERGE_SCHEMA)
+            '''
+            db.executescript('BEGIN IMMEDIATE;\n' + foundation + migration + '\n' + IR_SCHEMA + '\n' + ATTACHMENT_SCHEMA + '\n' + SEARCH_SCHEMA + '\n' + FULLTEXT_SCHEMA + '\n' + TRASH_SCHEMA + '\n' + MERGE_SCHEMA)
             if version < 8:
                 for row in db.execute('SELECT document_id FROM desktop_ir_current').fetchall():
                     index_current_ir(db, row[0])
@@ -171,11 +186,37 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
                 db.execute(f"CREATE TRIGGER IF NOT EXISTS desktop_audit_validate_{action.lower()} BEFORE {action} ON desktop_audit "
                            f"WHEN NEW.point NOT IN ({values}) OR NEW.outcome NOT IN ('succeeded','failed') "
                            "BEGIN SELECT RAISE(ABORT, 'Invalid audit event'); END")
-            db.execute('PRAGMA user_version=10')
+            if db.execute('PRAGMA foreign_key_check').fetchone():
+                raise ValueError('本地资料关系校验失败，升级未提交。')
+            db.execute('PRAGMA user_version=11')
+            db.commit()
+            db.execute('PRAGMA foreign_keys=ON')
+            db.execute('PRAGMA legacy_alter_table=OFF')
         for job in self.list_jobs():
             if job['state'] in ('queued', 'running'):
                 job.update(state='failed', error='上次退出时任务未完成，请重新提交；远程请求可能已计费。')
                 self.put_job(job)
+
+    @staticmethod
+    def _fileless_migration_sql(db):
+        # Foreign keys are disabled only for this atomic table replacement.
+        # 外键只在原子替换表时暂时关闭；不触发历史关系级联删除。
+        preserved = [row[0] for row in db.execute("SELECT sql FROM sqlite_master WHERE tbl_name IN ('desktop_documents','desktop_attachment_links') AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY type,name")]
+        script = '''CREATE TABLE desktop_documents_v11(id TEXT PRIMARY KEY,sha256 TEXT,data TEXT NOT NULL);
+            INSERT INTO desktop_documents_v11 SELECT id,sha256,data FROM desktop_documents;
+            DROP TABLE desktop_documents;
+            ALTER TABLE desktop_documents_v11 RENAME TO desktop_documents;'''
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='desktop_attachment_links'").fetchone():
+            script += '''CREATE TABLE desktop_attachment_links_v11(
+                parent_document_id TEXT NOT NULL REFERENCES desktop_documents(id) ON DELETE CASCADE,
+                child_document_id TEXT PRIMARY KEY REFERENCES desktop_documents(id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK(role IN ('translation','supplement','merged_record')),
+                label TEXT NOT NULL CHECK(length(label) BETWEEN 1 AND 1024),
+                CHECK(parent_document_id != child_document_id));
+                INSERT INTO desktop_attachment_links_v11 SELECT * FROM desktop_attachment_links;
+                DROP TABLE desktop_attachment_links;
+                ALTER TABLE desktop_attachment_links_v11 RENAME TO desktop_attachment_links;'''
+        return script+'\n'+';\n'.join(preserved)+';\n'
 
     @contextmanager
     def connection(self):
@@ -208,16 +249,16 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
         document = json.loads(row[0])
         if owner:
             document['parentDocumentId'] = owner[0]
-        return document
+        return self._file_identity(document)
 
     def object_path(self, document):
+        BibliographicPolicy.require_pdf(document)
         digest = document['sha256']
-        if not re.fullmatch(r'[0-9a-f]{64}', digest):
-            raise ValueError('无效文献哈希。')
         return self.objects / (digest + '.pdf')
 
     def import_pdf(self, path):
-        return self._import_pdf(path)
+        document=self._import_pdf(path)
+        return self.document(document['id'])
 
     def _import_pdf(self, path, parent_id=None, role=None):
         source = Path(path)
@@ -276,6 +317,14 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
                     if parent_id is not None:
                         db.execute('INSERT INTO desktop_attachment_links VALUES(?,?,?,?)',
                                    (parent_id, document['id'], role, source.name[:1024]))
+                        parent = json.loads(db.execute(
+                            'SELECT data FROM desktop_documents WHERE id=?', (parent_id,),
+                        ).fetchone()[0])
+                        # Only the first selected PDF is assigned automatically.
+                        # 只为尚未选择主文件的书目自动选择首个真实 PDF。
+                        if not BibliographicPolicy.is_pdf(parent) and parent.get('primaryPdfId') is None:
+                            parent['primaryPdfId']=document['id']
+                            db.execute('UPDATE desktop_documents SET data=? WHERE id=?',(json.dumps(parent,ensure_ascii=False),parent_id))
                     db.execute('INSERT INTO desktop_audit(point,outcome,created_at) VALUES(?,?,?)',
                                ('document_imported', 'succeeded', timestamp()))
                 return document
@@ -288,28 +337,31 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
                     target.unlink(missing_ok=True)
                 raise
 
+    def create_bibliographic_item(self, metadata, collection_id=None):
+        document = dict(
+            id=str(uuid.uuid4()), title='', authors='', doi='', year='', tags=[], notes='',
+            sha256=None, filename=None, sizeBytes=None, fileKind='bibliographic',
+            primaryPdfId=None, sourcePaths=[], createdAt=timestamp(),
+        )
+        document = BibliographicPolicy.metadata_change(document, metadata)
+        with self.lock, self.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if collection_id is not None:
+                self._require_collection(db,collection_id)
+            db.execute('INSERT INTO desktop_documents(id,sha256,data) VALUES(?,NULL,?)',(document['id'],json.dumps(document,ensure_ascii=False)))
+            if collection_id is not None:
+                db.execute('INSERT INTO desktop_memberships VALUES(?,?)',(document['id'],collection_id))
+            db.execute('INSERT INTO desktop_audit(point,outcome,created_at) VALUES(?,?,?)',('bibliographic_created','succeeded',timestamp()))
+        return self.document(document['id'])
+
     def update_document(self, document_id, patch):
-        fields = {'title', 'authors', 'doi', 'year', 'tags', 'notes', 'itemType', 'creators', *BIB_FIELDS}
-        if not isinstance(patch, dict) or set(patch) - fields:
-            raise ValueError('文献修改字段无效。')
-        for key, value in patch.items():
-            if key == 'creators':
-                continue
-            if key == 'tags':
-                patch = {**patch, 'tags': normalize_tags(value)}
-            elif not isinstance(value, str):
-                raise ValueError('文献元数据必须是文本。')
-            elif len(value.encode('utf-8')) > 65536:
-                raise ValueError('每个文献元数据字段不能超过 64 KiB。')
-        with self.lock:
-            self.require_active(document_id)
-            document = self.document(document_id)
-            document = metadata_patch(document, patch)
-            if not document['title'].strip():
-                raise ValueError('标题不能为空。')
-            with self.connection() as db:
-                db.execute('UPDATE desktop_documents SET data=? WHERE id=?', (json.dumps(document, ensure_ascii=False), document_id))
-            return document
+        with self.lock, self.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self.require_active(document_id,db)
+            raw=json.loads(db.execute('SELECT data FROM desktop_documents WHERE id=?',(document_id,)).fetchone()[0])
+            document=BibliographicPolicy.metadata_change(raw,patch)
+            db.execute('UPDATE desktop_documents SET data=? WHERE id=?',(json.dumps(document,ensure_ascii=False),document_id))
+        return self.document(document_id)
 
     def document_family_ids(self, document_id):
         with self.connection() as db:
@@ -426,6 +478,7 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
         if engine not in ('babeldoc', 'pdfmathtranslate'):
             raise ValueError('不支持的翻译引擎。')
         self.require_active(document_id)
+        BibliographicPolicy.require_pdf(self.document(document_id))
         identifier = str(uuid.uuid4())
         output = self.prepare_cache(self.get_settings()['cachePath']) / 'jobs' / identifier
         job = dict(id=identifier, documentId=document_id, engine=engine, state='queued', createdAt=timestamp(),
@@ -433,6 +486,7 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
         with self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
             self.require_active(document_id, db)
+            self.require_pdf(document_id,db)
             if db.execute("SELECT 1 FROM desktop_jobs WHERE state IN ('queued','running')").fetchone():
                 raise ValueError('首版同时仅运行一个翻译任务，请等待当前任务结束。')
             db.execute('INSERT INTO desktop_jobs VALUES(?,?,?,?)', (identifier, document_id, 'queued', json.dumps(job)))
@@ -477,7 +531,7 @@ class LocalStore(DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary,
             protected.extend(self.output_path(job).glob('*.pdf'))
         return atomic_export(destination,data,
             protected_roots=[self.root,*extra_protected,*pending_roots,*[self.output_path(job) for job in self.list_jobs()]],
-            protected_files=protected, original_paths=originals,original_hashes={document['sha256'] for document in documents})
+            protected_files=protected, original_paths=originals,original_hashes={document['sha256'] for document in documents if BibliographicPolicy.is_pdf(document)})
 
     def export_translation(self, job_id, artifact_index, destination):
         source=self.artifact_path(job_id,artifact_index)

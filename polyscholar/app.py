@@ -79,7 +79,7 @@ class Window(LibraryPage, ReaderPage, TasksPage, SummaryPage, CitationsPage, Set
         self.io_status.setText(message)
         for button in (self.import_button,self.read_button,self.reader_result,self.reader_source):button.setEnabled(False)
         worker=IOWorker(work,self);self.io_worker=worker
-        self.update_evidence_controls();self.update_attachment_controls()
+        self.update_evidence_controls();self.update_attachment_controls();self.update_task_controls()
         worker.ready.connect(lambda value:self.guard(lambda:ready(value)) if not self._closing else None,Qt.ConnectionType.QueuedConnection)
         worker.failed.connect(lambda message:QMessageBox.warning(self,'操作未完成',message) if not self._closing else None,Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(self.io_finished,Qt.ConnectionType.QueuedConnection);worker.start()
@@ -89,7 +89,7 @@ class Window(LibraryPage, ReaderPage, TasksPage, SummaryPage, CitationsPage, Set
         if worker:worker.deleteLater()
         self.io_status.setText('')
         for button in (self.import_button,self.read_button,self.reader_result,self.reader_source):button.setEnabled(True)
-        self.update_evidence_controls();self.update_attachment_controls()
+        self.update_evidence_controls();self.update_attachment_controls();self.update_task_controls()
         if self._closing:self.close()
 
     def closeEvent(self,event:QCloseEvent):

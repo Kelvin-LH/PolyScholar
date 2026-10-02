@@ -68,6 +68,9 @@ class DuplicateTests(unittest.TestCase):
         master=self.store.document(ids[0]);self.assertEqual(master['title'],'Preferred');self.assertEqual(master['year'],'2021')
         self.assertEqual(master['tags'],['A','B']);self.assertIn('Keep A',master['notes']);self.assertIn('Keep B',master['notes'])
         source=self.store.document(ids[1]);source.pop('parentDocumentId')
+        # Root-only derived selection flags change when an identity becomes a child.
+        # 根条目转为子记录后，根专用选择状态不属于保留元数据。
+        before_source.pop('primaryPdfId');before_source.pop('hasAnyPdf')
         self.assertEqual(source,before_source);self.assertTrue(before_path.exists())
         self.assertEqual(self.service.list_claims(ids[1])[0]['id'],claim['id'])
         self.assertEqual(self.service.list_jobs()[0]['id'],job['id'])

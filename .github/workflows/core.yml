@@ -70,3 +70,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/smoke_duplicates.py
+      - name: Check fileless bibliography and real primary PDF identity
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_bibliographic.py

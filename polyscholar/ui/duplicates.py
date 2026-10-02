@@ -65,7 +65,7 @@ class MergeDialog(ManagedIODialog):
         heading = QLabel('人工合并文献')
         heading.setObjectName('heading')
         layout.addWidget(heading)
-        hint = QLabel('仅合并同类型主条目。主记录原 PDF 保持；其他原 PDF 变为补充附件，其附件一并归入主记录。PDF 身份、证据和任务保留；标签与集合合并，本地笔记保留来源。没有撤销功能，原始文件不删除。')
+        hint = QLabel('仅合并同类型主条目。主记录原 PDF 保持；其他已有原 PDF 变为补充附件，其附件一并归入主记录。PDF 身份、证据和任务保留；标签与集合合并，本地笔记保留来源。没有撤销功能，原始文件不删除。')
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.status = QLabel('')
@@ -213,7 +213,7 @@ class MergeDialog(ManagedIODialog):
         preview = self._preview
         sources = {key:combo.currentData() for key,combo in self.field_sources.items()}
         master_id = self.master.currentData()
-        message = f"主记录：{self.master.currentText()}\n合并 {len(preview['documentIds'])} 条文献，保留 {preview['counts']['pdfs']} 个 PDF 身份及其证据、任务。其他主条目成为补充附件。没有撤销功能。\n\n确认使用已核对的字段来源进行合并？"
+        message = f"主记录：{self.master.currentText()}\n合并 {len(preview['documentIds'])} 条文献，保留 {preview['counts']['pdfs']} 个 PDF 身份及其证据、任务。其他已有主 PDF 成为补充附件，无文件来源保留本地合并记录。没有撤销功能。\n\n确认使用已核对的字段来源进行合并？"
         if not plain_question(self,'确认人工合并',message):
             return
         def ready(result):

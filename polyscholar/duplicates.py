@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import hashlib
 from itertools import combinations
 import json
+from .bibliographic import BibliographicPolicy
 import re
 import time
 import uuid
@@ -243,6 +244,19 @@ class DuplicateLibrary:
             _check_deadline(deadline)
             return result
 
+    def _merge_primary_pdf_id(self, db, documents, master_id):
+        master = next(document for document in documents if document['id'] == master_id)
+        current = self._primary_pdf_id(db, master)
+        if current is not None or BibliographicPolicy.is_pdf(master) or master.get('primaryPdfId') is not None:
+            return current
+        # An empty bibliographic master may inherit an actual selected source PDF.
+        # 空书目主条目可继承来源已选择的真实 PDF；隐藏的已有选择不被覆盖。
+        for document in documents:
+            selected = self._primary_pdf_id(db, document)
+            if selected is not None:
+                return selected
+        return None
+
     def _build_merge_state(self, db, document_ids, master_id, deadline):
         for identifier in document_ids:
             self._require_root(db, identifier)
@@ -290,11 +304,11 @@ class DuplicateLibrary:
             raise ValueError('合并书目关系快照超过本地安全大小上限。')
         jobs = [json.loads(row[0]) for row in db.execute('SELECT data FROM desktop_jobs WHERE document_id IN (SELECT id FROM merge_scope)')]
         notes_count = sum(bool((row[0] or '').strip()) for row in db.execute("SELECT json_extract(data,'$.notes') FROM desktop_documents WHERE id IN (SELECT id FROM merge_scope)"))
-        counts = dict(pdfs=len(family),attachments=len(family)-len(document_ids),notes=notes_count,
+        counts = dict(records=len(family),pdfs=db.execute('SELECT COUNT(*) FROM desktop_documents d JOIN merge_scope s ON s.id=d.id WHERE d.sha256 IS NOT NULL').fetchone()[0],attachments=db.execute('SELECT COUNT(*) FROM desktop_documents d JOIN merge_scope s ON s.id=d.id JOIN desktop_attachment_links a ON a.child_document_id=d.id WHERE d.sha256 IS NOT NULL').fetchone()[0],notes=notes_count,
             claims=db.execute('SELECT COUNT(*) FROM desktop_claims WHERE document_id IN (SELECT id FROM merge_scope)').fetchone()[0],jobs=len(jobs),
             artifacts=sum(len(job.get('artifacts',[])) for job in jobs),collections=len({row[1] for row in snapshot['memberships']}),trashedChildren=len(snapshot['trash']))
         return dict(documentIds=list(document_ids),masterId=master_id,documents=documents,fields={field:[dict(documentId=doc['id'],value=doc.get(field,'')) for doc in documents] for field in MERGE_FIELDS},
-            counts=counts,revision=digest.hexdigest(),activeJobs=any(job['state'] in ('queued','running') for job in jobs)),snapshot
+            counts=counts,primaryPdfId=self._merge_primary_pdf_id(db,documents,master_id),revision=digest.hexdigest(),activeJobs=any(job['state'] in ('queued','running') for job in jobs)),snapshot
 
     def merge_preview(self, document_ids, master_id=None):
         master_id = self.validate_merge_selection(document_ids,master_id)
@@ -317,6 +331,7 @@ class DuplicateLibrary:
                 raise ValueError('请等待所有相关翻译任务结束后合并。')
             documents={document['id']:document for document in preview['documents']}
             master=documents[master_id]
+            inherited_primary = preview['primaryPdfId'] if not BibliographicPolicy.is_pdf(master) and master.get('primaryPdfId') is None else None
             selected={field:documents[field_sources.get(field,master_id)].get(field,'') for field in MERGE_FIELDS}
             merged=metadata_patch(master,selected)
             if not merged['title'].strip():
@@ -325,14 +340,16 @@ class DuplicateLibrary:
             contributions,notes = merge_note_contributions(documents.values())
             merged['mergeNoteSources'] = contributions
             merged['notes'] = notes
+            if inherited_primary is not None:merged['primaryPdfId']=inherited_primary
             for source in document_ids:
                 if source==master_id:
                     continue
                 # Move children first, preserving the single-level shape trigger.
                 # 先迁移子附件，再将原主 PDF 作为附件，保持单层父子约束。
                 db.execute('UPDATE desktop_attachment_links SET parent_document_id=? WHERE parent_document_id=?',(master_id,source))
-                label='合并前主PDF · '+documents[source]['filename']
-                db.execute('INSERT INTO desktop_attachment_links VALUES(?,?,?,?)',(master_id,source,'supplement',label[:1024]))
+                is_pdf=BibliographicPolicy.is_pdf(documents[source])
+                label=('合并前主PDF · '+documents[source]['filename']) if is_pdf else ('合并前书目 · '+documents[source]['title'])
+                db.execute('INSERT INTO desktop_attachment_links VALUES(?,?,?,?)',(master_id,source,'supplement' if is_pdf else 'merged_record',label[:1024]))
                 db.execute('INSERT OR IGNORE INTO desktop_memberships(document_id,collection_id) SELECT ?,collection_id FROM desktop_memberships WHERE document_id=?',(master_id,source))
                 db.execute('DELETE FROM desktop_memberships WHERE document_id=?',(source,))
             db.execute('UPDATE desktop_documents SET data=? WHERE id=?',(json.dumps(merged,ensure_ascii=False),master_id))
@@ -346,6 +363,9 @@ class DuplicateLibrary:
         with self.connection() as db:
             family = self._family_ids(db,master_id)
             result = []
+            snapshot_bytes = sum(db.execute('SELECT COALESCE(SUM(length(CAST(snapshot AS BLOB))),0) FROM desktop_merge_history WHERE master_id=?',(identifier,)).fetchone()[0] for identifier in family)
+            if snapshot_bytes > MAX_HISTORY_BYTES:
+                raise ValueError('合并历史快照总量超过 32 MiB，请缩小查看范围。')
             for identifier in family:
                 for row in db.execute('SELECT id,master_id,document_ids,snapshot,counts,created_at FROM desktop_merge_history WHERE master_id=? ORDER BY created_at,id',(identifier,)):
                     result.append(dict(id=row[0],masterId=row[1],documentIds=json.loads(row[2]),snapshot=json.loads(row[3]),counts=json.loads(row[4]),createdAt=row[5]))

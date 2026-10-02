@@ -30,7 +30,7 @@ def preview_text(preview):
     """
     names = {'pdfs':'PDF 文件', 'notes':'本地笔记', 'claims':'证据 / 摘要',
              'jobs':'翻译任务', 'artifacts':'翻译产物', 'collections':'集合关系'}
-    lines = [preview['title'], f"涉及 {len(preview['documentIds'])} 个 PDF 身份"]
+    lines = [preview['title'], f"涉及 {len(preview['documentIds'])} 个条目身份"]
     lines.extend(f"{label}：{preview['counts'].get(key, 0)}" for key, label in names.items())
     if preview.get('activeJobs'):
         lines.append('存在活动任务，操作会被阻止。')

@@ -7,6 +7,7 @@ SQLite 与文件系统不能共同提交；未完成清理必须明确保留并�
 """
 from datetime import datetime, timezone
 import json
+from .bibliographic import BibliographicPolicy
 import os
 from pathlib import Path
 import shutil
@@ -91,11 +92,11 @@ class TrashLibrary:
             jobs=[json.loads(row[0]) for identifier in identifiers for row in db.execute('SELECT data FROM desktop_jobs WHERE document_id=?',(identifier,))]
             marker=bool(db.execute('SELECT 1 FROM desktop_trash WHERE document_id=?',(document_id,)).fetchone())
             active_jobs=any(job['state'] in ('queued','running') for job in jobs)
-            counts=dict(pdfs=len(documents),notes=sum(bool(doc.get('notes','').strip()) for doc in documents),
+            counts=dict(records=len(documents),pdfs=sum(BibliographicPolicy.is_pdf(doc) for doc in documents),notes=sum(bool(doc.get('notes','').strip()) for doc in documents),
                 claims=sum(db.execute('SELECT COUNT(*) FROM desktop_claims WHERE document_id=?',(identifier,)).fetchone()[0] for identifier in identifiers),
                 jobs=len(jobs),artifacts=sum(len(job.get('artifacts',[])) for job in jobs),
                 collections=sum(db.execute('SELECT COUNT(*) FROM desktop_memberships WHERE document_id=?',(identifier,)).fetchone()[0] for identifier in identifiers))
-            managed=[str(self.object_path(document)) for document in documents]
+            managed=[str(self.object_path(document)) for document in documents if BibliographicPolicy.is_pdf(document)]
             managed += [str(self.output_path(job)) for job in jobs]
             return dict(documentId=document_id,title=documents[0]['title'],documentIds=identifiers,counts=counts,
                 managedFiles=list(dict.fromkeys(managed)),sourceFiles=list(dict.fromkeys(path for document in documents for path in document.get('sourcePaths',[]))),
@@ -110,10 +111,23 @@ class TrashLibrary:
             self._require_idle(db,identifiers)
             documents=[json.loads(db.execute('SELECT data FROM desktop_documents WHERE id=?',(identifier,)).fetchone()[0]) for identifier in identifiers]
             jobs=[json.loads(row[0]) for identifier in identifiers for row in db.execute('SELECT data FROM desktop_jobs WHERE document_id=?',(identifier,))]
+            # Purging a selected child clears its pointer without choosing a substitute.
+            # 永久删除主附件时清除选择，不擅自替换为其他文件。
+            db.execute('CREATE TEMP TABLE purge_scope(id TEXT PRIMARY KEY)')
+            db.executemany('INSERT INTO purge_scope VALUES(?)', [(identifier,) for identifier in identifiers])
+            for raw,identifier in db.execute('''SELECT data,id FROM desktop_documents
+                    WHERE json_extract(data,'$.primaryPdfId') IN (SELECT id FROM purge_scope)
+                    AND id NOT IN (SELECT id FROM purge_scope)'''):
+                root=json.loads(raw)
+                if identifier not in identifiers and root.get('primaryPdfId') in identifiers:
+                    root['primaryPdfId']=None
+                    db.execute('UPDATE desktop_documents SET data=? WHERE id=?',(json.dumps(root,ensure_ascii=False),identifier))
             for identifier in identifiers:db.execute('DELETE FROM desktop_jobs WHERE document_id=?',(identifier,))
             for identifier in identifiers:db.execute('DELETE FROM desktop_documents WHERE id=?',(identifier,))
             paths=[]
             for document in documents:
+                if not BibliographicPolicy.is_pdf(document):
+                    continue
                 if not db.execute('SELECT 1 FROM desktop_documents WHERE sha256=?',(document['sha256'],)).fetchone():
                     paths.append(self._capture_cleanup_path(dict(kind='object',path=str(self.object_path(document)))))
             for job in jobs:

@@ -6,7 +6,8 @@ class TasksPage:
     def tasks(self):
         l=self.page('翻译任务','选择文献，开始翻译。所选内容将发送至配置的模型 API。')
         r=QHBoxLayout();self.task_doc=QComboBox();r.addWidget(self.task_doc,1);self.pages=QLineEdit();self.pages.setPlaceholderText('页范围，留空全部');r.addWidget(self.pages)
-        r.addWidget(self.button('创建翻译任务',self.start_job,True));l.addLayout(r)
+        self.create_translation_button=self.button('创建翻译任务',self.start_job,True);r.addWidget(self.create_translation_button);l.addLayout(r)
+        self.task_empty=QLabel('没有可用 PDF。请在文献库添加真实 PDF 后再创建翻译任务。');self.task_empty.setWordWrap(True);l.addWidget(self.task_empty)
         self.send_boundary=QLabel();self.send_boundary.setWordWrap(True);l.addWidget(self.send_boundary)
         self.pages.textChanged.connect(self.refresh_boundary);self.refresh_boundary()
         self.job_table=QTableWidget(0,6);self.job_table.setHorizontalHeaderLabels(['文献','引擎','状态','进度','用量','操作']);self.job_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch);l.addWidget(self.job_table,1)
@@ -16,7 +17,12 @@ class TasksPage:
         for label,identifier in self.pdf_choices():self.task_doc.addItem(label,identifier)
         index=self.task_doc.findData(previous)
         if index>=0:self.task_doc.setCurrentIndex(index)
-        self.task_doc.blockSignals(False)
+        self.task_doc.blockSignals(False);self.update_task_controls()
+
+    def update_task_controls(self):
+        has_pdf=self.task_doc.count()>0
+        self.create_translation_button.setEnabled(has_pdf and self.io_worker is None and not self._closing)
+        self.task_empty.setVisible(not has_pdf)
 
     def start_job(self):
         doc_id=self.task_doc.currentData()

@@ -141,7 +141,7 @@ class CollectionLibrary:
                     SELECT 1 FROM desktop_memberships m WHERE m.document_id=d.id) ORDER BY d.rowid DESC''')
             else:
                 rows = db.execute('SELECT data FROM desktop_documents ORDER BY rowid DESC')
-            documents = [json.loads(row[0]) for row in rows]
+            documents = [self._file_identity(json.loads(row[0]),db) for row in rows]
             children = {row[0] for row in db.execute('SELECT child_document_id FROM desktop_attachment_links')}
             documents = [document for document in documents if document['id'] not in children and self.is_active(document['id'], db)]
         needle = text.strip().casefold()

@@ -9,7 +9,7 @@
 - `list_documents() -> list[dict]`
 - `import_pdf(path) -> dict`：100 MiB 限制、PDF 文件头验证、SHA-256 去重、只读本地对象副本。
 - `update_document(document_id, patch) -> dict`：标题、作者、DOI、年份、标签和本地笔记。
-- `delete_document(document_id)`：保护正在执行的任务；删除库中副本与该文献任务产物，保留外部原文件。
+- `delete_document(document_id)`：保护正在执行的任务，默认移入回收站；显式永久删除才清理副本与产物，保留外部原文件。
 - `read_pdf(document_id) -> bytes`：供 QtPdf 的 QBuffer 使用。
 - `get_settings() -> dict`；`save_settings(settings) -> dict`。
 - `set_session_key(key)`：密钥仅存进程内存，传空文本清除，关闭应用清除；不写 JSON、SQLite、日志。
@@ -126,8 +126,20 @@ v9 升级前备份 library-before-v9.sqlite3；回收标记、队列、审计触
 
 `list_duplicate_candidates(limit=200)` 只读取活动根条目的候选字段，返回 items/documentIds/reasons、精确 total 和 truncated。相同类型内：规范 DOI 相同、格式/校验位有效的 ISBN 相同，或规范标题相同且完整作者身份相同、已知年份相差不超过1年。ISBN-10 转为对应978 ISBN-13；13位限定978/979。不是文件哈希去重，也不证明同一作品，不能自动合并。候选检测不联网；上限为20000根条目、64MiB候选字段、200000作者索引项、100000对和30秒检查预算，超过明确失败，不返回虚假的截断总数。ISBN格式依据 [International ISBN Agency](https://www.isbn-international.org/index.php/node/10)，不联网核查发行注册真实性。
 
-`merge_preview(document_ids,master_id=None)` 接受2–20个不同、相同类型的活动根条目，返回规范元数据、逐字段来源选项、关联数量、activeJobs及revision。手动选择不依赖候选算法；不能把子附件当书目主项。预览最多2000个家族PDF，读取事务内逐行计算关联状态摘要；IR原文不复制进历史快照。
+`merge_preview(document_ids,master_id=None)` 接受2–20个不同、相同类型的活动根条目，返回规范元数据、逐字段来源选项、关联数量、activeJobs及revision。手动选择不依赖候选算法；不能把子附件当书目主项。预览最多2000个家族记录，读取事务内逐行计算关联状态摘要；IR原文不复制进历史快照。
 
 `merge_documents(document_ids,master_id,field_sources,expected_revision)` 要求当前预览摘要匹配，拒绝关联漂移、活动任务及实际在途解析/摘要/翻译。字段来源只能取所选条目；未指定沿用主条目，日期/年份冲突拒绝。主PDF不换；其他原主PDF作为明确标注的补充附件，其既有子附件迁移至主条目。原PDF、任务、产物、IR、摘要、证据和外部来源路径保持独立身份；子附件回收标记保留。集合和标签取并集；所选主条目的不同笔记带来源ID合并，超出既有字段上限则拒绝，不截断。内部 mergeNoteSources 保存贡献列表；只有当前笔记仍逐字等于受控格式化结果才复用贡献，多轮合并不再次嵌套来源标题；人工修改后的笔记按新的真实原文保留，不猜测文本头部。
 
 SQLite v10 升级前备份 library-before-v10.sqlite3。关系迁移、主书目更新、合并前书目/关系快照与固定 documents_merged 审计同事务，不删除文件。`list_merge_history(master_id)` 供本地查看历史，快照不作为自动撤销接口；合并不可自动撤销。显式永久删除所属文献才级联清除历史。外部已导出的引用不自动改写，不宣称 Zotero Word 插件等价。
+
+## 无文件书目与主要 PDF（v11）
+
+`create_bibliographic_item(metadata,collection_id=None)` 复用既有元数据校验，创建四类书目并可同事务加入集合；标题必填，审计失败全部回滚。无文件条目 `fileKind='bibliographic'`，SHA/filename/sizeBytes/primaryPdfId 为 null，sourcePaths 为空；数据库 SHA 为真正 NULL，没有占位文件。`hasPdf` 表示该身份本身是真 PDF，根条目的 `primaryPdfId/hasAnyPdf` 表示当前可用的主要文件。
+
+`primary_pdf_id(root_id)` 返回活动、真实、归属正确的 PDF ID；旧 PDF 根默认使用自身。`set_primary_pdf(root_id,pdf_id)` 显式选择并与固定审计同事务。首个后加 PDF 在尚无保存选择时自动设为主要文件；主要附件移入回收站后返回 None，保存原选择供恢复，不回退到其他附件。已有选择被隐藏时新增附件不替换；恢复不覆盖用户后来选择。永久删除主要附件同事务清空指针，仍不回退；以后新导入可成为主要文件。
+
+无文件条目可组织、检索、导出引用、合并和回收，但读 PDF、IR、解析、全文索引、证据、翻译和模型摘要拒绝该身份，调用者必须选择实际文件 ID。`list_attachments` 只返回真实 PDF；内部文献列表包含所有书目/文件用于历史与保护，路径和哈希保护只取真实文件。无文件条目不显示为等待解析的全文覆盖项。
+
+合并无文件来源保留 `merged_record` 关系，移走其真实子附件，不伪装成文件。空书目主项可继承来源已选择的活动 PDF；已有隐藏选择保持。预览返回计划 primaryPdfId，实际提交仍核对 revision；counts.records 是记录数，pdfs/attachments 只计真实文件。历史读取先检查家族快照总字节不超过32 MiB。
+
+v11 升级前备份 library-before-v11.sqlite3；原子重建可空 SHA 表与扩展关系角色，保留旧 ID、哈希、索引、触发器、IR、成员与任务。重建期间暂关外键避免旧关系级联删除，提交前 foreign_key_check，所有常规连接开启外键。模式错误或关系损坏保持旧版本与数据，拒绝启动，不绕过校验。

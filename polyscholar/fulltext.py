@@ -9,6 +9,7 @@ from contextlib import contextmanager
 import sqlite3
 import time
 import json
+from .bibliographic import BibliographicPolicy
 from .validation import QUERY_TEXT_POLICY
 
 FULLTEXT_SCHEMA = '''
@@ -111,9 +112,9 @@ class FulltextLibrary:
             raise ValueError('文献标识无效。')
         with self.lock, self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
-            identifiers = [document_id] if document_id else [r[0] for r in db.execute('SELECT id FROM desktop_documents') if self.is_active(r[0], db)]
+            identifiers = [document_id] if document_id else [r[0] for r in db.execute('SELECT id FROM desktop_documents') if self.is_active(r[0], db) and BibliographicPolicy.is_pdf(json.loads(db.execute('SELECT data FROM desktop_documents WHERE id=?',(r[0],)).fetchone()[0]))]
             for identifier in identifiers:
-                self.require_active(identifier, db)
+                self.require_pdf(identifier, db)
                 if not db.execute('SELECT 1 FROM desktop_documents WHERE id=?',(identifier,)).fetchone():
                     raise ValueError('文献不存在。')
                 if rebuild:
@@ -148,7 +149,9 @@ class FulltextLibrary:
                     _check_deadline(deadline)
                     parent=parent or identifier
                     if parent not in root_ids or not self.is_active(identifier, db):continue
-                    doc=json.loads(raw);family[identifier]=parent;titles[identifier]=doc
+                    doc=json.loads(raw)
+                    if not BibliographicPolicy.is_pdf(doc):continue
+                    family[identifier]=parent;titles[identifier]=doc
                     actual_status = status or ('unparsed' if not revision else 'cleared')
                     if not revision and last_parse=='failed':actual_status='parse_failed'
                     coverage.append(dict(documentId=identifier,parentDocumentId=parent,revisionId=revision,status=actual_status,

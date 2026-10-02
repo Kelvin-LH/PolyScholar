@@ -67,7 +67,11 @@ class ReaderPage:
 
     def open_original(self):
         document=self.selected()
-        if document:self.open_document(document['id'])
+        if not document:return
+        # 书目身份不等于 PDF；仅用实际主要文件身份打开阅读器。
+        # Bibliographic identity is not a PDF; open only the actual primary file identity.
+        identifier=self.service.primary_pdf_id(document['id'])
+        if identifier:self.open_document(identifier)
 
     def open_evidence(self,block):
         if self.io_worker is not None or self._closing:return

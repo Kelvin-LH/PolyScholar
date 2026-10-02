@@ -114,6 +114,17 @@ class LocalService:
     def list_documents(self):
         return self.store.list_root_documents()
 
+    def create_bibliographic_item(self, metadata, collection_id=None):
+        with self._lock:
+            return self.store.create_bibliographic_item(metadata,collection_id)
+
+    def primary_pdf_id(self, root_id):
+        return self.store.primary_pdf_id(root_id)
+
+    def set_primary_pdf(self, root_id, pdf_id):
+        with self._lock:
+            return self.store.set_primary_pdf(root_id,pdf_id)
+
     def list_attachments(self, parent_id):
         return self.store.list_attachments(parent_id)
 
@@ -135,7 +146,7 @@ class LocalService:
         return self.store.rebuild_fulltext_index(document_id)
 
     def parse_document(self, document_id):
-        self.store.require_active(document_id)
+        self.store.require_pdf(document_id)
         try:
             return self._parse_document(document_id)
         except Exception:
@@ -164,7 +175,7 @@ class LocalService:
                     raise ValueError('应用正在关闭。')
                 child = subprocess.Popen([str(python), '-I', str(worker)], env=environment(),
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                self.store.require_active(document_id)
+                self.store.require_pdf(document_id)
                 self._children[identifier] = child
                 self._child_documents[identifier] = document_id
             request = json.dumps({'source': str(self.store.object_path(document)), 'sha256': document['sha256']}).encode('utf-8')
@@ -199,24 +210,24 @@ class LocalService:
                 self._child_documents.pop(identifier, None)
 
     def current_document_ir(self, document_id):
-        self.store.require_active(document_id)
+        self.store.require_pdf(document_id)
         return self.store.current_document_ir(document_id)
 
     def document_blocks(self, document_id, revision_id=None):
-        self.store.require_active(document_id)
+        self.store.require_pdf(document_id)
         return self.store.document_blocks(document_id, revision_id)
 
     def save_claim(self, document_id, text, evidence):
-        self.store.require_active(document_id)
+        self.store.require_pdf(document_id)
         return self.store.save_claim(document_id, text, evidence)
 
     def list_claims(self, document_id):
-        self.store.require_active(document_id)
+        self.store.require_pdf(document_id)
         return self.store.list_claims(document_id)
 
     def summarize_document(self, document_id, block_ids, revision_id=None, expected_settings=None):
         """Send only explicitly selected current blocks; atomically save checked claims."""
-        self.store.require_active(document_id)
+        self.store.require_pdf(document_id)
         with self._lock:
             if self._closed:
                 raise ValueError('应用正在关闭。')
@@ -243,7 +254,7 @@ class LocalService:
             with self._lock:
                 if self._closed:
                     raise ValueError('应用正在关闭。')
-                self.store.require_active(document_id)
+                self.store.require_pdf(document_id)
                 self._children[identifier] = child
                 self._child_documents[identifier] = document_id
         def finished(child):
@@ -445,7 +456,7 @@ class LocalService:
         return [job for job in self.store.list_jobs() if self.store.is_active(job['documentId'])]
 
     def start_translation(self, document_id, pages=''):
-        self.store.require_active(document_id)
+        self.store.require_pdf(document_id)
         if not isinstance(pages, str) or len(pages) > 4096:
             raise ValueError('页码范围无效。')
         if pages:

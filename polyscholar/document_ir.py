@@ -128,7 +128,7 @@ class DocumentIRLibrary:
         created_at = datetime.now(timezone.utc).isoformat()
         with self.lock, self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
-            self.require_active(document_id, db)
+            self.require_pdf(document_id, db)
             source = db.execute('SELECT sha256 FROM desktop_documents WHERE id=?', (document_id,)).fetchone()
             if source is None:
                 raise ValueError('文献不存在。')
@@ -182,7 +182,7 @@ class DocumentIRLibrary:
         claim_id = str(uuid.uuid4())
         with self.lock, self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
-            self.require_active(document_id, db)
+            self.require_pdf(document_id, db)
             if not db.execute('SELECT 1 FROM desktop_documents WHERE id=?', (document_id,)).fetchone():
                 raise ValueError('文献不存在。')
             current = db.execute('SELECT revision_id FROM desktop_ir_current WHERE document_id=?', (document_id,)).fetchone()
@@ -215,7 +215,7 @@ class DocumentIRLibrary:
         saved_ids = []
         with self.lock, self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
-            self.require_active(document_id, db)
+            self.require_pdf(document_id, db)
             current = db.execute('SELECT revision_id FROM desktop_ir_current WHERE document_id=?', (document_id,)).fetchone()
             if current is None or current[0] != revision_id:
                 raise ValueError('文献解析版本已变化，请重新生成摘要。')

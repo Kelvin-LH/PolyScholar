@@ -7,6 +7,7 @@ from .searches import SearchDialog
 from .fulltext import FullTextDialog
 from .trash import TrashDialog, TrashMoveOperation
 from .duplicates import DuplicatesDialog
+from .bibliographic import BibliographicDialog
 from copy import deepcopy
 from ..metadata import APPLICABLE, legacy_creators, creator_display
 
@@ -14,7 +15,7 @@ class LibraryPage:
     def library(self):
         l=self.page('文献库','本地整理文献、元数据与笔记。集合与标签管理将逐步对标 Zotero。')
         r=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('搜索标题、作者、DOI、标签');self.search.textChanged.connect(self.filter_docs)
-        r.addWidget(self.search);self.import_button=self.button('导入 PDF',self.import_pdf,True);r.addWidget(self.import_button);l.addLayout(r)
+        r.addWidget(self.search);self.new_bibliographic_button=self.button('新建书目',self.new_bibliographic);r.addWidget(self.new_bibliographic_button);self.import_button=self.button('导入 PDF',self.import_pdf,True);r.addWidget(self.import_button);l.addLayout(r)
         self.advanced_query={'match':'all','conditions':[]};self._saved_query_changed=False
         advanced=QHBoxLayout();self.advanced_search_button=self.button('高级元数据检索',self.edit_search);advanced.addWidget(self.advanced_search_button);self.saved_searches=QComboBox();self.saved_searches.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon);self.saved_searches.setMinimumContentsLength(8);self.saved_searches.addItem('未选择保存搜索',None);self.saved_searches.currentIndexChanged.connect(self.select_saved_search);advanced.addWidget(self.saved_searches,1);l.addLayout(advanced)
         search_actions=QHBoxLayout();self.save_search_button=self.button('保存新搜索',self.save_new_search);search_actions.addWidget(self.save_search_button)
@@ -50,13 +51,15 @@ class LibraryPage:
         self.notes=QTextEdit();self.notes.setPlaceholderText('本地笔记');f.addRow('笔记',self.notes)
         self.membership_info=QLabel('');self.membership_info.setWordWrap(True);f.addRow('所属集合',self.membership_info);self.membership_add_button=self.button('加入集合',self.add_to_collection);self.membership_remove_button=self.button('移出当前集合',self.remove_from_collection);f.addRow(self.membership_add_button);f.addRow(self.membership_remove_button);
         self.attachment_list=QListWidget();self.attachment_list.setMaximumHeight(130);self.attachment_list.currentRowChanged.connect(self.update_attachment_controls);f.addRow('PDF 附件',self.attachment_list)
+        self.attachment_empty=QLabel('未添加 PDF：这是无文件书目，可用于引用与检索。添加真实 PDF 后才能阅读、解析和翻译。');self.attachment_empty.setWordWrap(True);self.attachment_empty.setMinimumHeight(100);f.addRow(self.attachment_empty)
         self.attachment_role=QComboBox();self.attachment_role.addItem('补充材料','supplement');self.attachment_role.addItem('已有译文','translation');f.addRow('导入附件类型',self.attachment_role)
         self.attachment_add_button=self.button('添加 PDF 附件',self.add_attachment);self.attachment_read_button=self.button('阅读选中附件',self.read_attachment);self.attachment_delete_button=self.button('附件移至回收站',self.remove_attachment)
+        self.primary_pdf_button=self.button('设为主要 PDF',self.set_primary_pdf);f.addRow(self.primary_pdf_button)
         f.addRow(self.attachment_add_button);f.addRow(self.attachment_read_button);f.addRow(self.attachment_delete_button)
-        f.addRow(self.button('保存条目',self.save_doc,True));self.read_button=self.button('阅读文献',self.open_original);f.addRow(self.read_button);f.addRow(self.button('移至回收站',self.delete_doc))
+        f.addRow(self.button('保存条目',self.save_doc,True));self.read_button=self.button('阅读主要 PDF',self.open_original);f.addRow(self.read_button);f.addRow(self.button('移至回收站',self.delete_doc))
         inspector_scroll=QScrollArea();inspector_scroll.setWidgetResizable(True);inspector_scroll.setWidget(inspector);inspector_scroll.setMinimumWidth(300)
         split.addWidget(inspector_scroll);split.setSizes([210,520,300]);l.addWidget(split,1)
-        self.empty=QLabel('还没有文献，请先导入本地 PDF。');self.empty.setObjectName('muted');l.addWidget(self.empty)
+        self.empty=QLabel('还没有文献，可新建书目或导入本地 PDF。');self.empty.setObjectName('muted');l.addWidget(self.empty)
 
     def selected(self):
         item=self.document_list.currentItem()
@@ -75,7 +78,7 @@ class LibraryPage:
             if current and current['id']==d['id']:self.document_list.setCurrentItem(item)
         self.document_list.blockSignals(False);self.select_doc(self.document_list.currentRow())
         if hasattr(self,'empty'):
-            self.empty.setVisible(self.document_list.count()==0);self.empty.setText('当前集合或筛选下没有文献。' if self.docs else '还没有文献，请先导入本地 PDF。')
+            self.empty.setVisible(self.document_list.count()==0);self.empty.setText('当前集合或筛选下没有文献。' if self.docs else '还没有文献，可新建书目或导入本地 PDF。')
 
     def select_doc(self,_):
         d=self.selected() or {}
@@ -296,6 +299,17 @@ class LibraryPage:
         if dialog.exec()==QDialog.DialogCode.Accepted:
             self._metadata_creators=dialog.creators();self._authors_loaded='; '.join(creator_display(c) for c in self._metadata_creators if c['role']=='author');self.fields['authors'].setText(self._authors_loaded);self.update_creator_info()
 
+    def new_bibliographic(self):
+        if self.io_worker is not None or self._closing:return
+        self.bibliographic_dialog=BibliographicDialog(self,self.current_collection())
+        self.bibliographic_dialog.show()
+
+    def set_primary_pdf(self):
+        parent=self.selected();row=self.selected_attachment()
+        if not parent or not row or self.io_worker is not None or self._closing:return
+        self.run_io(lambda:self.service.set_primary_pdf(parent['id'],row['documentId']),
+                    lambda _:self.refresh(),'正在设置主要 PDF…')
+
     def open_duplicates(self):
         if self.io_worker is not None or self._closing:
             return
@@ -335,7 +349,7 @@ class LibraryPage:
 
     def attachment_label(self,row):
         role={'original':'原文','supplement':'补充材料','translation':'已有译文'}.get(row['role'],row['role'])
-        return f"{role} · {row.get('filename',row.get('label','PDF'))}"
+        return f"{role} · {row.get('filename',row.get('label','PDF'))}"+('（主要 PDF）' if row.get('isPrimary') else '')
 
     def pdf_choices(self):
         choices=[]
@@ -356,7 +370,17 @@ class LibraryPage:
                 self.attachment_list.addItem(self.attachment_label(row));item=self.attachment_list.item(self.attachment_list.count()-1);item.setData(Qt.ItemDataRole.UserRole,row);item.setToolTip(row['filename'])
                 if previous and previous['documentId']==row['documentId']:self.attachment_list.setCurrentItem(item)
             if self.attachment_list.currentRow()<0:self.attachment_list.setCurrentRow(0)
+        self.attachment_empty.setVisible(bool(parent) and self.attachment_list.count()==0)
         self.update_attachment_controls()
+
+    def update_read_controls(self):
+        if not hasattr(self,'read_button'):
+            return
+        parent = self.selected()
+        # 书目身份不代表文件身份；读取只使用后端确认的真实主要 PDF。
+        # A bibliographic identity is not a file; read only the backend-selected real primary PDF.
+        primary = self.service.primary_pdf_id(parent['id']) if parent else None
+        self.read_button.setEnabled(primary is not None and self.io_worker is None and not self._closing)
 
     def update_attachment_controls(self,*args):
         if not hasattr(self,'attachment_add_button'):return
@@ -366,6 +390,9 @@ class LibraryPage:
         self.attachment_add_button.setEnabled(bool(parent) and not busy)
         self.attachment_read_button.setEnabled(bool(row) and not busy)
         self.attachment_delete_button.setEnabled(bool(row and row['role']!='original') and not busy)
+        self.primary_pdf_button.setEnabled(bool(row and not row.get('isPrimary')) and not busy)
+        self.new_bibliographic_button.setEnabled(not busy)
+        self.update_read_controls()
 
     def add_attachment(self):
         parent=self.selected()

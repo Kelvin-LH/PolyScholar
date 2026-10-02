@@ -47,7 +47,7 @@ class SummaryPage:
         if identifier!=self._evidence_loaded_id:self.claim_text.clear()
         self._evidence_loaded_id=identifier;self.evidence_blocks.clear();self.evidence_text.clear();self.evidence_claims.clear()
         if not identifier:
-            self.evidence_status.setText('请先导入本地 PDF。');self.update_summary_range();return
+            self.evidence_status.setText('没有可用 PDF。请在文献库添加真实 PDF 后再解析或生成摘要。');self.update_summary_range();return
         def load():
             revision=self.service.current_document_ir(identifier)
             blocks=self.service.document_blocks(identifier)
