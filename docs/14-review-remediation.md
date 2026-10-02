@@ -18,6 +18,8 @@
 
 用户新增Zotero迁移需求，现有书目格式导入不能当完整库迁移；集合树、附件、HTML笔记/PDF批注及其他Zotero类型的专用迁移仍设计中。V1–V5、Windows ACL、凭据崩溃清理和三平台安装门槛继续开放。全程只用合成文件，不读取用户Zotero资料，不上传私人文献/密钥/日志，不进行付费API调用。
 
+源码 `b3cf329` 的 [CI 37003196865](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37003196865) 已确认六项全部成功，Windows/macOS/Linux core与native-gui实际完成，包含新引文流程及spawn解析。该证据不替代真实冻结安装包或Zotero应用生成资料库的迁移验收。
+
 ## 无文件书目与真实 PDF 身份复核（v11）
 
 2026-10-02：此前必须先有 PDF 才能整理书目，无法覆盖无附件的书目管理。新增四类无文件条目，复用元数据、集合、标签、引用、候选、合并、回收与恢复。SQL SHA 为 NULL；不生成伪 PDF/哈希/IR。真实 PDF 操作在服务与事务入口拒绝书目身份；后添加的 PDF 保留独立 ID 和证据。
