@@ -59,11 +59,13 @@ def main():
             for index in range(dialog.results.count()):
                 if dialog.results.item(index).data(Qt.ItemDataRole.UserRole)['documentId']==parent['id']:dialog.results.setCurrentRow(index);break
             dialog.locate();wait(lambda:window.io_worker is None and window.reader_document and window.reader_document['id']==parent['id']);wait(lambda:window.pdf_docs[0].pageCount()==2)
-            assert window.pdf_views[0].pageNavigator().currentPage()==1
+            # 文档加载完成后，定位还要经过零时延 Qt 定时器；等待真正导航结果。
+            # PDF Ready precedes the queued navigation timer; wait for the actual target page.
+            wait(lambda:window._reader_evidence is None and window.pdf_views[0].pageNavigator().currentPage()==1)
             for index in range(dialog.results.count()):
                 if dialog.results.item(index).data(Qt.ItemDataRole.UserRole)['documentId']==child['documentId']:dialog.results.setCurrentRow(index);break
             dialog.locate();wait(lambda:window.io_worker is None and window.reader_document and window.reader_document['id']==child['documentId']);wait(lambda:window.pdf_docs[0].pageCount()==1)
-            assert window.pdf_views[0].pageNavigator().currentPage()==0
+            wait(lambda:window._reader_evidence is None and window.pdf_views[0].pageNavigator().currentPage()==0)
             service.parse_document(child['documentId'])
             with patch.object(QMessageBox,'warning') as warning:
                 dialog.locate();wait(lambda:window.io_worker is None);assert warning.called and '变化' in warning.call_args.args[2]

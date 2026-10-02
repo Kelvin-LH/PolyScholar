@@ -14,7 +14,9 @@ v10→v11 迁移使用真实 NOT NULL SHA 与旧两角色 CHECK 测试库，验�
 
 本机 Python3.12 完整 `python -m unittest discover -s tests -v` 实际157项通过；新 `scripts/smoke_bibliographic.py` 原生流程通过，回收站原生独立回归通过。团队另执行桌面、元数据、附件、重复合并和全文原生回归通过。新建书目截图已检查并加入 README；附件空态截图只展示滚动后的局部页面，未声称既有窄窗布局全部整改。首轮新烟测误将无文件 current_document_ir 预期为 None，实际合同应拒绝该身份，修正测试后通过；不是引擎或安装包缺陷。基线、compileall及diff检查通过。
 
-无私人文献或付费 API 调用。三平台新流程已接入源码 CI，执行结果待补录。V1–V5、Windows ACL、凭据崩溃清理、三平台安装验收、外部链接/非 PDF 附件、CSL 样式与完整 Zotero 对标继续开放；无文件书目的上述源码闭环已有执行证据。
+无私人文献或付费 API 调用。三平台新流程已接入源码 CI。源码 `63f91c8` 的 [首轮 CI 36966895077](https://github.com/Kelvin-LH/PolyScholar/actions/runs/36966895077) 三平台 core 与 Linux 原生通过；Windows 原生在旧全文流程的子 PDF 页码即时断言失败，后续新书目步骤未执行。日志明确为 scripts/smoke_fulltext.py 原66行的 currentPage==0；源码读取发现 PDF 加载 Ready 后定位还通过零时延 QTimer，因此页数变化不能作为定位完成证据。测试改为原有15秒上限内等待 _reader_evidence 消费及实际目标页，同时仍断言两页/一页文件和真实身份，不硬睡或手动导航。本机修后完整全文原生流程通过，Windows 重跑结果待补录，未将此诊断当作已关闭的 Windows 验证。
+
+V1–V5、Windows ACL、凭据崩溃清理、三平台安装验收、外部链接/非 PDF 附件、CSL 样式与完整 Zotero 对标继续开放；无文件书目的上述源码闭环已有执行证据。
 
 | 项目 | 当前状态 | 实际整改或剩余工作 |
 |---|---|---|
