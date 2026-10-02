@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Synthetic source snapshots and failure paths / 合成来源快照及失败路径。"""
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import os
@@ -213,7 +214,9 @@ class ZoteroMigrationTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.service.preview_zotero_migration(self.source)
 
     def test_subset_archive_resources_source_protection_and_shared_hash_ambiguity(self):
-        with sqlite3.connect(self.source/'zotero.sqlite') as db:
+        # SQLite 上下文只提交/回滚；closing 在清理前释放 Windows 文件句柄。
+        # SQLite's context only commits/rolls back; closing releases Windows handles before cleanup.
+        with closing(sqlite3.connect(self.source/'zotero.sqlite')) as db, db:
             db.execute("UPDATE itemAttachments SET contentType='text/html',path='storage:page.html' WHERE itemID=3")
         html=self.source/'storage'/'CCCCCCCC'/'page.html'
         html.write_text('<script>not executed</script><img src="https://example.com/x">')
@@ -236,7 +239,7 @@ class ZoteroMigrationTests(unittest.TestCase):
         self.assertEqual(html.read_text(),'<script>not executed</script><img src="https://example.com/x">')
 
     def test_archive_write_failure_rolls_back_and_schema_upgrade_backup_failure(self):
-        with sqlite3.connect(self.source/'zotero.sqlite') as db:
+        with closing(sqlite3.connect(self.source/'zotero.sqlite')) as db, db:
             db.execute("UPDATE itemAttachments SET contentType='text/html',path='storage:page.html' WHERE itemID=3")
         (self.source/'storage'/'CCCCCCCC'/'page.html').write_text('local raw bytes')
         preview=self.service.preview_zotero_migration(self.source)
@@ -254,11 +257,11 @@ class ZoteroMigrationTests(unittest.TestCase):
         # 升级 SQL 失败后，旧版本及可读备份都保留。
         self.service.close()
         path=self.root/'local'/'library.sqlite3'
-        with sqlite3.connect(path) as db: db.execute('PRAGMA user_version=11')
+        with closing(sqlite3.connect(path)) as db, db: db.execute('PRAGMA user_version=11')
         with patch('polyscholar.store.MIGRATION_SCHEMA','SELECT missing_column;'):
             with self.assertRaises(sqlite3.OperationalError): LocalService(self.root/'local')
-        with sqlite3.connect(path) as db: self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],11)
-        with sqlite3.connect(self.root/'local'/'library-before-v12.sqlite3') as db:
+        with closing(sqlite3.connect(path)) as db, db: self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],11)
+        with closing(sqlite3.connect(self.root/'local'/'library-before-v12.sqlite3')) as db, db:
             self.assertEqual(db.execute('PRAGMA integrity_check').fetchone()[0],'ok')
         self.service=LocalService(self.root/'local')
         with self.service.store.connection() as db:
@@ -271,11 +274,11 @@ class ZoteroMigrationTests(unittest.TestCase):
         def changed(reader,directory,copy_files=False):
             result=real(reader,directory,copy_files);calls.append(1)
             if copy_files:
-                with sqlite3.connect(directory/'zotero.sqlite') as db: db.execute("UPDATE itemDataValues SET value='Changed' WHERE valueID=1")
+                with closing(sqlite3.connect(directory/'zotero.sqlite')) as db, db: db.execute("UPDATE itemDataValues SET value='Changed' WHERE valueID=1")
             return result
         with patch.object(ZoteroSnapshotReader,'manifest',changed):
             with self.assertRaises(ValueError): self.service.preview_zotero_migration(self.source)
-        with sqlite3.connect(self.source/'zotero.sqlite') as db:
+        with closing(sqlite3.connect(self.source/'zotero.sqlite')) as db, db:
             db.execute("UPDATE itemAttachments SET path='storage:../../escape.pdf' WHERE itemID=3")
         preview=self.service.preview_zotero_migration(self.source)
         self.assertEqual(preview['resources'][0]['status'],'unsafe')
