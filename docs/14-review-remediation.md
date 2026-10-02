@@ -1,6 +1,6 @@
 # 2026-10-01 审查整改追踪
 
-更新：2026-10-02。输入报告审查 main@b36e8a6；本轮复核基线为 72a3162。报告是待核实问题来源，状态按当前实现与执行证据更新，不直接照搬结论。
+更新：2026-10-03。输入报告审查 main@b36e8a6；初次复核基线为 72a3162。报告是待核实问题来源，状态按当前实现与执行证据更新，不直接照搬结论。
 
 最新无文件增量的复核基线为 `8d3a89b`，其 [CI 36965313054](https://github.com/Kelvin-LH/PolyScholar/actions/runs/36965313054) 已实际确认成功；下述新增验证不改变真实引擎与发行验收门槛。
 
@@ -19,6 +19,14 @@
 用户新增Zotero迁移需求，现有书目格式导入不能当完整库迁移；专用目录迁移已实现初步闭环，完整适配与实际库验收见下节。V1–V5、Windows ACL、凭据崩溃清理和三平台安装门槛继续开放。全程只用合成文件，不读取用户Zotero资料，不上传私人文献/密钥/日志，不进行付费API调用。
 
 源码 `b3cf329` 的 [CI 37003196865](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37003196865) 已确认六项全部成功，Windows/macOS/Linux core与native-gui实际完成，包含新引文流程及spawn解析。该证据不替代真实冻结安装包或Zotero应用生成资料库的迁移验收。
+
+## 三平台专用冻结构建已启动（2026-10-03）
+
+源码 `d83c4c0` 增加仅手动触发的 `.github/workflows/package-validation.yml`，Windows/Linux/macOS 分别从干净 checkout 下载哈希固定的独立 Python、安装隔离引擎、构建冻结包并执行实际包检查。权限只有 contents:read；不上传运行时、安装包或原始日志，只记录固定的合成验收摘要。所用官方 actions 已核对版本并固定到 commit。
+
+`scripts/check_package_relocation.py` 复用包内检查与运行时验证，在真正中文/空格前缀下验证后恢复原包位置；拒绝覆盖既有证据，只在完整成功后排他发布固定 JSON。团队及协调者分别对现有 macOS `a7218fc` 包实际执行成功，原生启动、冻结导入、两套嵌入引擎版本/pip check 及恢复均通过；证据拒绝覆盖也已验证。该检查不是新的 Windows/Linux 包证明。
+
+已实际 dispatch [Frozen desktop validation 37023285205](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37023285205)，head 为 `d83c4c0`，三平台均正在准备独立运行时与引擎，结果待确认。后续仅跟踪这一运行，按 job/step conclusion 和实际输出记录通过或失败，不因观察超时重启。即使全部构建成功，仍不关闭真实翻译/API、Windows ACL/凭据清理、三平台干净系统安装、签名公证与其他 V1–V5 门槛。
 
 ## 冻结包内导入与子进程检查（2026-10-03）
 
