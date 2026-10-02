@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 import copy
 import sqlite3
+from contextlib import closing
 import tempfile
 from pathlib import Path
 import unittest
@@ -164,7 +165,7 @@ class DocumentIRTests(unittest.TestCase):
         with self.store.connection() as db:
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
             self.assertEqual(db.execute('SELECT * FROM desktop_audit').fetchall(), audit)
-        with sqlite3.connect(self.store.root / 'library-before-v4.sqlite3') as backup:
+        with closing(sqlite3.connect(self.store.root / 'library-before-v4.sqlite3')) as backup:
             self.assertEqual(backup.execute('PRAGMA user_version').fetchone()[0], 3)
             self.assertEqual(backup.execute('SELECT * FROM desktop_audit').fetchall(), audit)
             self.assertEqual(backup.execute('SELECT id FROM desktop_jobs').fetchall(), [('history-job',)])
