@@ -124,7 +124,7 @@ class FulltextLibrary:
                        ('fulltext_index_rebuilt' if rebuild else 'fulltext_index_cleared','succeeded',_now()))
         return dict(documentCount=len(identifiers))
 
-    def search_fulltext(self,text,collection_id=None,unfiled=False,tags=None,include_descendants=False,query=None,limit=200,metadata_text=''):
+    def search_fulltext(self,text,collection_id=None,unfiled=False,tags=None,include_descendants=False,query=None,limit=200,metadata_text='',document_id=None):
         text = QUERY_TEXT_POLICY.validate(text, '全文搜索值必须是最多 4 KiB 的单行文本。')
         if type(limit) is not int or not 1<=limit<=1000:
             raise ValueError('全文搜索结果上限必须是 1–1000。')
@@ -153,6 +153,13 @@ class FulltextLibrary:
                     coverage.append(dict(documentId=identifier,parentDocumentId=parent,revisionId=revision,status=actual_status,
                         lastParseStatus=last_parse,lastError=error,previousCurrent=bool(revision and last_parse=='failed'),blockCount=blocks,
                         pageCount=pages,indexedBlockCount=indexed,title=doc['title'],filename=doc['filename']))
+                # Scope to one document family (paper + its attachments) so agents
+                # can grep a single paper instead of sweeping the whole library.
+                if document_id is not None:
+                    target = family.get(document_id)
+                    if target is None or target not in root_ids:
+                        raise ValueError('文献不存在或不在检索范围内。')
+                    root_ids = {target}
                 items=[];total=0
                 if needle and family:
                     db.execute('CREATE TEMP TABLE fulltext_scope(id TEXT PRIMARY KEY)')

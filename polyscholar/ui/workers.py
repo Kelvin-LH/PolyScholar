@@ -39,6 +39,8 @@ class FetchModels(QThread):
         super().__init__(); self.service, self.endpoint, self.key = service, endpoint, key
     def run(self):
         try: self.ready.emit(self.service.list_models(self.endpoint, self.key or None))
-        except Exception: self.failed.emit('无法获取模型列表，请检查地址、密钥或手动填写模型名称。')
+        except Exception as error:
+            # Validation errors are actionable; anything else stays sanitized.
+            self.failed.emit(str(error) if isinstance(error, ValueError) else '无法获取模型列表，请检查地址、密钥或手动填写模型名称。')
         finally: self.key = ''
 

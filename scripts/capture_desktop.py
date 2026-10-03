@@ -30,7 +30,7 @@ def main():
             service.import_attachment(doc['id'],supplement,'supplement')
         window=Window(service)
         try:
-            window.show();app.processEvents();window.document_list.setCurrentRow(0)
+            window.show();app.processEvents();window.document_tree.setCurrentItem(window.document_tree.topLevelItem(0))
             app.processEvents();window.grab().save(str(args.output/'library-python.png'))
             window.attachment_list.setCurrentRow(1)
             attachment_scroll=window.attachment_list.parentWidget()

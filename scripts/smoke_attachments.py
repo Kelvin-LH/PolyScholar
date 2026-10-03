@@ -33,24 +33,21 @@ def main():
         create_pdf(original,'Original parent evidence.');create_pdf(supplement,'Supplement child evidence.',2);create_pdf(translation,'Existing translated PDF.',3)
         service=LocalService(data_dir=root/'data');parent=service.import_pdf(original);window=Window(service)
         try:
-            window.show();app.processEvents();window.document_list.setCurrentRow(0)
+            window.show();app.processEvents();window.document_tree.setCurrentItem(window.document_tree.topLevelItem(0))
             assert window.attachment_list.count()==1 and not window.attachment_delete_button.isEnabled()
             with patch.object(QFileDialog,'getOpenFileName',return_value=(str(supplement),'PDF')):
                 window.add_attachment();assert not window.attachment_add_button.isEnabled();wait_until(lambda:window.io_worker is None)
             window.attachment_role.setCurrentIndex(window.attachment_role.findData('translation'))
             with patch.object(QFileDialog,'getOpenFileName',return_value=(str(translation),'PDF')):
                 window.add_attachment();wait_until(lambda:window.io_worker is None)
-            assert len(service.list_documents())==1 and window.document_list.count()==1
+            assert len(service.list_documents())==1 and window.document_tree.topLevelItemCount()==1
             rows=service.list_attachments(parent['id']);child=next(row for row in rows if row['role']=='supplement');translated=next(row for row in rows if row['role']=='translation')
             assert window.attachment_list.count()==3 and window.task_doc.count()==3 and window.evidence_doc.count()==3
             window.attachment_list.setCurrentRow(1);assert window.selected_attachment()['documentId']==child['id']
             window.refresh();assert window.selected_attachment()['documentId']==child['id']
-            window.read_attachment();wait_until(lambda:window.io_worker is None and window.pdf_docs[0].pageCount()==2)
+            window.read_attachment();wait_until(lambda:window.io_worker is None and window.pdf_document.pageCount()==2)
             assert window.reader_source.count()==3 and window.reader_source.currentData()==child['id']
-            assert window.reader_result.count()==1
-            window.jobs=[{'id':'parent-job','documentId':parent['id'],'state':'completed','artifacts':['parent.pdf']},{'id':'child-job','documentId':child['id'],'state':'completed','artifacts':['child.pdf']}]
-            window.refresh_reader_choices();assert window.reader_result.count()==2 and window.reader_result.itemData(1)==('child-job',0)
-            window.reader_source.setCurrentIndex(window.reader_source.findData(translated['id']));wait_until(lambda:window.io_worker is None and window.pdf_docs[0].pageCount()==3)
+            window.reader_source.setCurrentIndex(window.reader_source.findData(translated['id']));wait_until(lambda:window.io_worker is None and window.pdf_document.pageCount()==3)
             assert window.reader_document['id']==translated['id']
             window.evidence_doc.setCurrentIndex(window.evidence_doc.findData(child['id']));window.parse_evidence();wait_until(lambda:window.io_worker is None)
             assert window.evidence_blocks.count()==2 and 'Supplement child evidence.' in window.evidence_text.toPlainText()

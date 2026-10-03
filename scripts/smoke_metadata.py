@@ -21,7 +21,7 @@ def main():
             pdf.new_page().insert_text((60,80),'Local typed bibliographic metadata.');pdf.save(source)
         service=LocalService(data_dir=root/'data');document=service.import_pdf(source);window=Window(service)
         try:
-            window.show();app.processEvents();window.document_list.setCurrentRow(0)
+            window.show();app.processEvents();window.document_tree.setCurrentItem(window.document_tree.topLevelItem(0))
             creators=[{'role':'author','type':'person','family':'Chen','given':'Li','literal':''},
                 {'role':'author','type':'organization','family':'','given':'','literal':'Research Collective'},
                 {'role':'editor','type':'person','family':'Smith','given':'Sam','literal':''},
@@ -33,7 +33,7 @@ def main():
             dialog.add_creator({'role':'author','type':'person','literal':'Temporary'});dialog.remove_creator();assert dialog.creators()==expected
             with patch('polyscholar.ui.library.CreatorsDialog',return_value=dialog),patch.object(dialog,'exec',return_value=QDialog.DialogCode.Accepted):window.edit_creators()
             window.fields['title'].setText('Typed native editor')
-            window.fields['year'].setText('2024');window.fields['date'].setText('2024-02-29')
+            window.fields['date'].setText('2024-02-29')
             window.fields['publicationTitle'].setText('Local Journal');window.fields['volume'].setText('12');window.fields['issue'].setText('3');window.fields['pages'].setText('41-55')
             window.save_doc();app.processEvents()
             stored=service.list_documents()[0];assert stored['creators']==expected and stored['date']=='2024-02-29'
@@ -57,17 +57,17 @@ def main():
             with patch.object(QMessageBox,'warning') as warning:
                 window.save_doc();assert warning.called
             assert service.list_documents()[0]['date']=='2024-02-29' and window.fields['date'].text()=='2024-02-30'
-            window.fields['date'].setText('2024-02-29');window.fields['year'].setText('2025')
-            with patch.object(QMessageBox,'warning') as warning:
-                window.save_doc();assert warning.called
-            assert service.list_documents()[0]['year']=='2024'
-            window.fields['year'].setText('2024')
+            window.fields['date'].setText('2024-02-29')
             window._metadata_creators=[{'role':'author','type':'organization','family':'Invalid','given':'','literal':'Institution'}]
             with patch.object(QMessageBox,'warning') as warning:
                 window.save_doc();assert warning.called
             assert service.list_documents()[0]['creators']==expected
-            window.fields['authors'].setText('Legacy Complete Name');window.save_doc()
-            assert service.list_documents()[0]['creators']==[{'role':'author','type':'person','family':'','given':'','literal':'Legacy Complete Name'}]
+            # arXiv preprints are a first-class type: year derives from date and
+            # journal-only fields are hidden without losing retained values.
+            window._metadata_creators=list(expected)
+            window.item_type.setCurrentIndex(window.item_type.findData('arxiv-preprint'))
+            window.save_doc();stored=service.list_documents()[0]
+            assert stored['itemType']=='arxiv-preprint' and stored['year']=='2024'
         finally:window.close();service.close()
     print('Native typed metadata: four item types, creator order and identities, retained fields, citation preview and validation passed')
 

@@ -26,6 +26,8 @@
 | D6 | 已整改 | Python 枚举与 SQLite INSERT/UPDATE 触发器约束；v3 升级前备份，保留既有审计记录。 |
 | D7 | 已修复 | 删除不可能命中的基线检查分支，测试输出明确参考 SQL 的范围。 |
 
+| S7 | 用户显式决策，风险已记录 | 2026-10-02 用户选择增加明文配置文件密钥存储（~/.polyscholar/api_key，对齐常见 CLI agent）作为设置页可选项；凭据库仍为推荐默认，文件方式仅显式选择产生，风险（备份同步泄漏、同用户程序可读）在 docs/07/13 与设置页状态提示说明。Windows ACL 与 POSIX 0600 实际行为未实测。 |
+
 另修复自行发现的导出风险：原始导入文件、数据库、内部资源/产物及其硬链接不能作为导出目标；原子写入失败不破坏已有目标，重复导入记录原始来源路径。不会将原始来源路径写进引用导出或诊断报告。
 
 ## 执行证据
@@ -117,3 +119,42 @@ v7 升级前保存 library-before-v7.sqlite3；全文索引、复杂嵌套规则
 用户补充面向对象、重复功能复用及中英文注释要求。新增仓库开发约定和 [可维护性说明](15-code-maintainability.md)，本轮提取高级搜索/全文搜索的共同单行文本策略，补充关键事务和界面生命周期双语说明，改善重点方法可读性。全仓旧代码逐模块检查仍待完成，不把本轮局部整理称为全部代码达标。
 
 本轮局部重构保留 v8 和业务接口，120项测试通过；全文、元数据和高级搜索原生回归通过，编译/链接/diff检查通过。校验策略以不可变对象复用，新增UTF-8字节与空白顺序、孤立代理码点、Unicode控制符和数据库访问前失败的边界测试。重构源码 `fe975a5` 的 [CI run 36961464857](https://github.com/Kelvin-LH/PolyScholar/actions/runs/36961464857) core/native-gui 六项全部通过；本轮原生检索/元数据流程在三个系统实际执行。
+
+
+## 2026-10-03 agent 实战反馈整改
+
+另一个 agent 会话经 MCP 对 14 篇文献执行三盲评后反馈 8 项不足;逐条核实,7 项属实并整改,第 8 项(协调者主张清单需全文检索验证)属流程教训,不涉代码。独立核验确认:库中 7 篇文献的 paper 与 confidence 评分记录各 7 条齐全,GUI"只看到论文分理由"实为 QLabel 在表单布局+滚动区内不按换行扩展高度导致的长文本截断,且 GUI 此前无任何入口可查看 detail 明细 JSON。
+
+整改内容:GUI"AI 评分"改为只读文本视图(完整理由可滚动查看),新增"查看完整评分明细"对话框(ui/scores.py)只读渲染 detail 全部字段(维度/优劣/红旗/复核/三子代理原文)并支持原生导出 JSON。CLI 新增 `rubric list/show`(含版本与 SHA-256,供冻结材料包)、`status`(不取锁探测 GUI 占用与计数)、`score validate`(写库前结构校验:维度和=total、三子代理、中位数、spread 一致、超极差必须复核)、`add --meta`/`--quiet`、`--rationale-file`;退出码新增 2=库被占用(instance.LibraryBusy)、3=网络失败(arxiv.NetworkError),网络类错误提示补充 MCP 场景的 HTTPS_PROXY 配置说明;修复 cli.md 中 collection attach/detach 与实现不一致的契约漂移。打包脚本随包携带 rubrics/,cli.md 升为 v1.1,mcp.md 补充代理与评分工具链说明。
+
+证据:本机 Python 3.13.9,167 项测试通过(新增 21 项覆盖 rubric/status/validate/meta/quiet/退出码),1 项跳过;offscreen 明细对话框冒烟与标准 GUI 冒烟通过;真实库 `status --json` 实测返回 lock=busy、7 文献、双类型评分各 7。旧测试 test_mcp_server 对锁冲突断言 exit=1 已按新契约更新为 exit=2。运行中的 MCP server 进程持旧白名单,需客户端重连后 rubric/status 才可用,属部署刷新而非代码缺口。
+
+
+## 2026-10-03 第二轮:评分工作流全程序化与 token 收敛
+
+用户要求"能程序化的都进程序,不让 agent 消耗多余 token"。本轮把三盲评工作流剩余的 agent 侧脚本全部收编为工具:新增 `score aggregate`(输入三份首轮报告 JSON,程序完成逐份结构校验、rubric 版本与冻结材料包一致性核对、中位数计算、A→B→C 平局规则选代表报告、嵌入三份原文、生成 §6 汇总报告;首轮极差超限返回 needs_recheck+分歧条目+复核指令模板,`--recheck` 收三份复核报告重聚合并存 recheck_output,仍超限按 rubric 输出中位数并标 unresolved_disagreement;`--apply` 直写文献评分,`--out` 落盘)。新增 `score import-report`/`reports`:评委原文按(文献,类型,评委槽位)归档为数据库一等工件(schema v9→v10,迁移前备份 library-before-v10.sqlite3,≤1 MiB/份),与 detail 内嵌的 256 KiB 通道相互独立。
+
+其他 agent 高频消耗点同样内置:`search` 命令暴露既有 FTS 全文检索(默认全库,`--doc` 限定单篇含附件,fulltext.search_fulltext 增加 document_id 范围参数),替代 agent 自写 grep;`show --pages A-B` 按页取文本;`score show --summary` 剔除内嵌评委原文精简读回;`add --arxiv` 支持批量(多篇返回 {imported,errors},单篇保持原输出)。agent 的评分流程收敛为:rubric show → parse/text → 三子代理写报告文件 → score aggregate --apply 一次入库,自写脚本归零。
+
+证据:本机 Python 3.13.9,184 项测试通过(新增 aggregate 合卷/复核/分歧、归档读写、单篇检索、按页显示、批量导入、summary 读回共 17 项),1 项跳过;六个旧迁移测试的最终版本断言按 v10 更新,test_scores 的 schema 测试同步改名;GUI 冒烟与 compileall 通过。修复自见问题:set_score_report 的审计写曾在 BEGIN IMMEDIATE 事务内二次取连接导致库锁,已移到事务外。MCP 白名单加入 search;运行中的 server 仍需客户端重连才生效。
+
+
+## 2026-10-03 第三轮:应用内证据摘要整链移除
+
+用户确认"证据摘要"页面在 agent 工作流下无存在感且能力重复,选择整链删除。移除范围:GUI 证据摘要页(ui/summary.py,导航五页改制)、CLI `summarize` 命令与 `_need_key`、service 的 save_claim/list_claims/summarize_document、summary_model.py 与 integrations/summary_worker.py(隔离模型 worker)及打包脚本拷贝行、document_ir 的四张 claims 表定义与四个存取方法、审计点 claim_created。数据库 v10→v11:迁移前备份 library-before-v11.sqlite3 后 DROP 四表,已存证据笔记仅可从备份恢复,不静默销毁未备份数据。文献详情的"AI 提炼"维度(score set --kind summary)保留——要点分析由外部 agent 完成后经该通道写回。MCP 白名单移除 summarize;cli.md 升 v1.3,docs/10 第 4 节标记移除并保留原文作历史记录。
+
+证据:本机 Python 3.13.9,161 项测试通过、1 项跳过(净减 23:删除 test_summary_model/test_summary_http 两文件与 8 个 claims 专项方法;保留的 IR/迁移/级联测试改为纯 IR 断言,六个迁移测试最终版本断言升至 11);迁移测试覆盖 v11 备份与 DROP;GUI 冒烟、评分明细冒烟与 compileall 通过。修复残留引用:reader 页空态文案、attachment_flow 对已删 test_summary_http 的导入。
+
+
+## 2026-10-03 第四轮:提炼双代理合卷与明细对话框选项卡
+
+用户反馈:①评分明细对话框中置信度内容排在论文评分之后需长滚动;②提炼维度无数据且缺省式工作流。处置:评分明细对话框改为按类型选项卡(论文评分/置信度/AI 提炼各一页,单类型时保持单页),提炼页新增四节渲染(解决的问题/使用的方法/实验效果/不足与缺陷,条目带来源代理标记与出处)。新增 `score aggregate --kind summary`:恰好两份隔离子代理报告(契约:四节各 1–16 条,text≤2000B,evidence≤500B 可选,拒绝未知字段),程序按 A→B 逐节合并、规范空白后完全相同(忽略大小写)的条目合并保留双方标记、措辞不同一律保留(无模型裁量),`--apply` 直写提炼维度(分数空,理由缺省自动生成条数概览),`--out` 落盘;`--recheck` 对提炼拒绝;`score validate` 明确拒绝 summary 并指引 aggregate。`--reports/--recheck` 放宽为 nargs='+' 由代码按类型校验份数(评分三份/提炼两份)。
+
+证据:本机 Python 3.13.9,166 项测试通过、1 项跳过(新增提炼合并/去重/份数与契约拒绝/apply 直写/validate 守卫共 6 项);评分明细冒烟更新为三选项卡断言(各页内容、提炼四节、代理标记)并与标准 GUI 冒烟同过;compileall 通过。cli.md 升 v1.4 记录提炼契约。GUI 右栏三块评分窗口(论文分/置信度/提炼)保持上一轮设计,提炼数据经新命令写入后即在第三块与明细页显示。
+
+
+## 2026-10-03 第六轮:老库 summary 约束回归修复与聚合语义纠正
+
+评分 agent 实战反馈三项,逐项核实均属实:v12 前真实库 desktop_scores 的 CHECK 只有 paper/confidence(代码定义含 summary,但 CREATE TABLE IF NOT EXISTS 不更新既有表,且从未配迁移),提炼写库必然 IntegrityError 且 CLI 未捕获直接 traceback——已用真实库副本复现。修复:新增 SCHEMA_VERSION=12,desktop_scores 列与约束收敛为模块级唯一定义(建表与重建共用,杜绝定义漂移),v12 迁移整表重建并原样搬迁数据,升级前经备份链留 library-before-v12;备份链同时重构为循环(取代十一个逐版本复制的块)。CLI 捕获 sqlite3.IntegrityError 转为可读提示。`aggregation.rounds` 按 rubric §6.1 规则 6 修正为 0=未复核/1=复核过(原实现发 1/2,且 2 超出 rubric schema 上限),validate 新增 rounds 一致性检查——此前漏检正是违规产物未被拦截的原因。`score set` 成功回执精简为 {id,kind,score,detail_bytes},不再回显全量明细(实战报告点名的最大 token 开销)。
+
+证据:本机 Python 3.13.9,全套 172 项测试通过、1 项跳过;新增"老库两类型约束迁移重建"回归测试(模拟 v10 老库→迁移→summary 可写、旧行保留、备份存在)与 IntegrityError 干净错误测试;六个迁移测试最终版本断言升至 12。真实库迁移在应用下次打开时自动执行。

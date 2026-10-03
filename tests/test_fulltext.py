@@ -62,8 +62,6 @@ class FulltextTests(unittest.TestCase):
 
     def test_failure_coverage_clear_rebuild_restart_preserve_ir_evidence(self):
         revision=self.parse(0,'Evidence survives clearing')
-        block=self.service.store.document_blocks(self.docs[0]['id'])[0]
-        claim=self.service.save_claim(self.docs[0]['id'],'Note',[dict(blockId=block['id'],quote='Evidence')])
         self.parse(1,'')
         with patch.object(self.service,'_parse_document',side_effect=ValueError('private raw error')):
             for identifier in (self.docs[0]['id'],self.docs[2]['id']):
@@ -77,7 +75,6 @@ class FulltextTests(unittest.TestCase):
         self.service.clear_fulltext_index(self.docs[0]['id'])
         self.assertEqual(self.service.search_fulltext('Evidence')['total'],0)
         self.assertEqual(self.service.current_document_ir(self.docs[0]['id'])['id'],revision['id'])
-        self.assertEqual(self.service.list_claims(self.docs[0]['id'])[0]['id'],claim['id'])
         self.service.close();self.service=LocalService(self.root/'data')
         self.assertEqual(self.service.search_fulltext('Evidence')['total'],0)
         self.service.rebuild_fulltext_index(self.docs[0]['id'])

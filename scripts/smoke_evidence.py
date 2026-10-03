@@ -91,13 +91,13 @@ def main():
             window.evidence_claims.setCurrentRow(multiple)
             assert window.saved_evidence.count()==2
             window.saved_evidence.setCurrentIndex(next(index for index in range(window.saved_evidence.count()) if window.saved_evidence.itemData(index)['pageNumber']==2));window.locate_saved_claim()
-            wait_until(lambda:window.io_worker is None and window.pdf_docs[0].pageCount()==2)
-            wait_until(lambda:window.pdf_views[0].pageNavigator().currentPage()==1)
+            wait_until(lambda:window.io_worker is None and window.pdf_document.pageCount()==2)
+            wait_until(lambda:window.pdf_view.pageNavigator().currentPage()==1)
             window.evidence_blocks.setCurrentRow(1)
             block=window.evidence_blocks.currentItem().data(Qt.ItemDataRole.UserRole)
-            window.locate_evidence();wait_until(lambda:window.io_worker is None and window.pdf_docs[0].pageCount()==2)
-            navigator=window.pdf_views[0].pageNavigator();wait_until(lambda:navigator.currentPage()==1)
-            size=window.pdf_docs[0].pagePointSize(1);box=block['bbox'];position=navigator.currentLocation()
+            window.locate_evidence();wait_until(lambda:window.io_worker is None and window.pdf_document.pageCount()==2)
+            navigator=window.pdf_view.pageNavigator();wait_until(lambda:navigator.currentPage()==1)
+            size=window.pdf_document.pagePointSize(1);box=block['bbox'];position=navigator.currentLocation()
             assert abs(position.x()-(box[0]+box[2])*.5*size.width())<1
             assert abs(position.y()-(box[1]+box[3])*.5*size.height())<1
             window.parse_evidence();wait_until(lambda:window.io_worker is None)
@@ -106,7 +106,7 @@ def main():
             window.evidence_claims.setCurrentRow(0)
             assert '旧解析版本' in window.saved_quote.toPlainText()
             window.locate_saved_claim();wait_until(lambda:window.io_worker is None)
-            assert window.pdf_views[0].pageNavigator().currentPage()==0
+            assert window.pdf_view.pageNavigator().currentPage()==0
             window.refresh();assert window.evidence_doc.currentData()==source['id']
             window.evidence_doc.setCurrentIndex(window.evidence_doc.findData(scanned['id']))
             assert window.claim_text.toPlainText()=='' and window.evidence_blocks.count()==0

@@ -1,50 +1,22 @@
-# BabelDOC / PDFMathTranslate 集成
+# arXiv HTML 逐段翻译(2026-10-02 起)
 
-联网范围允许模型 API、DOI 元数据查询及上游模型/字体下载；文献处理与保存仍在本机。详细要求见 [个人使用与联网范围](09-local-and-network-scope.md)。此 CLI 尚未实现 DOI 查询，也未验证所有上游网络载荷；不得将允许下载解释为允许云 OCR、文献云存储或遥测。
+用户决策:放弃自带 BabelDOC/pdf2zh 运行时(原 876 MB 已删除),翻译改为 **arXiv HTML 逐段 + 用户配置的 LLM**。旧引擎路线的历史见 git 记录。
 
-采用官方 CLI 边界：BabelDOC 文档将内部 Python API 标为不稳定，因此不直接导入其内部翻译接口。两个引擎是可选择的替代路径，不依次翻译同一篇论文，避免重复成本与质量损失。
+## 流程
 
-## 独立环境
+`polyscholar/html_translate.py`:取 `arxiv.org/html/<id>`(旧论文回退 `ar5iv.labs.arxiv.org`)→ 按顶层块(p/标题/图注)切片 → 数学 MathML 用占位符保留不送模型 → 逐段调用用户配置的 OpenAI 兼容端点(并发 4)→ 还原公式占位符 → 原地重建整份 HTML:图表、图片、独立公式原样保留;可翻译段落(p/标题/图注,表格内除外)的英文替换为中文(内嵌公式在占位符处还原);References/Bibliography 起的文献部分不再翻译;单段翻译失败自动重试一次,仍失败保留原文段。产物为**中文-only**页面 `translated.html`。
 
-用 Python 3.12 建两个环境。BabelDOC 0.6.4 需要较新 PyMuPDF；pdf2zh 1.9.11 要求 PyMuPDF <1.25.3 和 BabelDOC <0.3.0，因此不能共享环境。
+## 纪律
 
-```sh
-python3.12 -m venv .venvs/babeldoc
-python3.12 -m venv .venvs/pdfmathtranslate
-.venvs/babeldoc/bin/python -m pip install -r integrations/babeldoc-requirements.txt
-.venvs/pdfmathtranslate/bin/python -m pip install -r integrations/pdfmathtranslate-requirements.txt
-```
+- 只发送论文公开文本的段落文本;数学、图片 URL 不翻译;
+- 单段失败保留原文,不失败整个任务;失败计数如实;
+- progress 回调上报 N/M,任务记录与界面实时显示;
+- HTTP/LLM 超时与体积上限与全局纪律一致;endpoint 校验复用全局规则;
+- 产物校验:必须含 </html> 且非空;导出走通用产物通道(24 MiB 上限)。
 
-Windows 将 `.venvs/<name>/bin/python` 替换为 `.venvs/<name>/Scripts/python.exe`。pdf2zh 环境额外固定腾讯 TMT SDK 3.1.70，修复新版本删除旧导入的问题。生产安装需固定传递依赖、验证下载哈希，并按平台测试模型与字体包。
+## 覆盖与边界
 
-## 调用
-
-适配层读取 `POLYSCHOLAR_API_KEY` 环境变量（请在本机安全配置；不把真实密钥写入 shell 历史、仓库或公开问题）。对于明确的本地网关，可使用 dummy token。模型名按提供商实际能力填写。
-
-```sh
-python3 -m integrations.engines --engine babeldoc \
-  --python .venvs/babeldoc/bin/python --input /absolute/path/paper.pdf \
-  --output /absolute/path/new-output-directory \
-  --endpoint https://api.deepseek.com --model YOUR_CONFIGURED_MODEL \
-  --pages 1-3 --allow-document-upload --allow-asset-download
-```
-
-换引擎时改为 `--engine pdfmathtranslate --python .venvs/pdfmathtranslate/bin/python`。输出目录必须不存在；页范围为 1-based，包括末页。成功结果附 `polyscholar-export.json`：引擎版本、模型、语言、页范围、输入/输出哈希。该清单未签名，不能证明来自官方发行，也不能证明翻译正确。
-
-显式确认标志表示允许指定引擎将选定内容发往配置 endpoint，并允许上游下载模型/字体等资源。上游可能读取/解析整篇 PDF，即使仅选部分页翻译；当前尚未通过网络捕获验证严格页范围外发，因此保密材料不要使用此 CLI。没有密钥就不会实际发起付费测试。
-
-## 凭据与执行防护
-
-- 使用绝对路径和 argv 列表，不启动 shell；页范围、语言和 endpoint 校验。
-- 密钥不进入命令参数。BabelDOC 用任务临时 TOML；pdf2zh 用任务临时 JSON。
-- pdf2zh 会持久化 translator 配置，必须使用 `--config` 指向临时私有文件；上游初始化可能创建默认空配置文件，但本适配不把密钥传入环境变量。
-- 临时文件/目录退出时清理；普通 POSIX 文件权限为 0600，Windows ACL 与崩溃残留清理仍须专门验证。明文临时文件不是 OS 凭据库的最终方案。
-- 子进程输出不回显，避免原始日志泄露论文/密钥；失败只报状态。后续支持经过用户预览的脱敏诊断。
-- 超时或中断终止进程树；已经到达远程的请求仍可能收费。进程隔离不是完整沙箱。
-- 未实现严格 token 预算、usage 汇总、断点续传和统一 LLM 网关；上游重试可能产生重复费用。生产产品集成前必须补齐。
-
-## 状态边界
-
-适配层参数、临时配置、超时、输出哈希和隐私边界由合成引擎测试覆盖。真实上游安装与 CLI 版本检查记录在 docs/07-validation.md。合成测试不证明整篇 PDF 能无损翻译，也不证明实际模型或上游下载行为满足隐私承诺。
-
-上游：[BabelDOC](https://github.com/funstory-ai/BabelDOC)、[PDFMathTranslate](https://github.com/PDFMathTranslate/PDFMathTranslate)。许可按 AGPL 原文执行；本项目不限制合法商用。
+- 仅支持带 arXiv 链接的文献;老论文依赖 ar5iv 的转换进度;
+- 页范围参数在此路线无意义(总是全文),界面保留但忽略;
+- HTML 重排后无页码概念:证据摘要与全文检索仍基于原 PDF 的 DocumentIR,两条体系各自成立;
+- MathML 在系统浏览器中原生渲染;图片热链自 arxiv.org,离线打开时图片不显示(已知取舍)。

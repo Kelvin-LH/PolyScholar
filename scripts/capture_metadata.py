@@ -31,8 +31,8 @@ def main():
             isbn='9780306406157', creators=creators))
         window = Window(service)
         try:
-            window.show(); window.document_list.setCurrentRow(0)
-            window.document_list.parentWidget().setSizes([210, 430, 450]); app.processEvents()
+            window.show(); window.document_tree.setCurrentItem(window.document_tree.topLevelItem(0))
+            window.document_tree.parentWidget().parentWidget().parentWidget() and None or None; app.processEvents()
             window.grab().save(str(output / 'metadata-python.png'))
             dialog = CreatorsDialog(creators, window); dialog.show(); app.processEvents()
             dialog.grab().save(str(output / 'creators-python.png')); dialog.close()

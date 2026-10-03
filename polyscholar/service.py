@@ -6,17 +6,22 @@ import platform
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 import uuid
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from .store import LocalStore
 from .metadata import exchange_metadata
-from .summary_model import selected_blocks, request_summary
-from integrations.engines import VERSIONS, limited_environment
+from . import arxiv as arxiv_client
+from . import secrets
+from . import html_translate
+from integrations import limited_environment
 
 MAX_EVENT = 1024 * 1024
 ERROR_CODES = {'invalid_request','engine_unavailable','engine_failed','timeout','cancelled','source_changed','invalid_output','io_error','internal_error','protocol_error'}
@@ -24,12 +29,25 @@ ERROR_CODES = {'invalid_request','engine_unavailable','engine_failed','timeout',
 def environment():
     return limited_environment()
 
-def app_data_dir():
+def legacy_app_data_dir():
     if sys.platform == 'win32':
         return Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData/Local')) / 'PolyScholar'
     if sys.platform == 'darwin':
         return Path.home() / 'Library/Application Support/PolyScholar'
     return Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')) / 'PolyScholar'
+
+def is_source_checkout():
+    """Source checkout (repo with pyproject.toml) -> portable data dir beside code."""
+    root = Path(__file__).resolve().parents[1]
+    return (root / 'pyproject.toml').is_file() and (root / 'polyscholar' / 'app.py').is_file()
+
+def app_data_dir():
+    # Frozen bundles and pip-installed packages may live in read-only or shared
+    # locations (site-packages), so they use the platform directory; only a
+    # source checkout is portable and keeps data beside the code.
+    if getattr(sys, 'frozen', False) or not is_source_checkout():
+        return legacy_app_data_dir()
+    return Path(__file__).resolve().parents[1] / 'data'
 
 def endpoint_url(value):
     try:
@@ -50,7 +68,10 @@ class NoRedirect(HTTPRedirectHandler):
 
 class LocalService:
     def __init__(self, data_dir=None, resources_dir=None):
-        self.store = LocalStore(data_dir or app_data_dir())
+        if data_dir is None:
+            data_dir = app_data_dir()
+            self._migrate_legacy_data(data_dir)
+        self.store = LocalStore(data_dir)
         if resources_dir is None:
             if getattr(sys, 'frozen', False):
                 resources_dir = Path(sys.executable).parents[1] / 'Resources/resources' if sys.platform == 'darwin' else Path(getattr(sys, '_MEIPASS', Path(sys.executable).parent)) / 'resources'
@@ -63,6 +84,96 @@ class LocalService:
         self._threads = {}
         self._closed = False
         self._subscribers = []
+
+    def _migrate_legacy_data(self, target):
+        """Copy pre-portable AppData content into the portable directory once.
+
+        The legacy directory is kept untouched as a backup; only a fresh
+        (empty or absent) portable target is populated, and only when a
+        legacy library actually exists.
+        """
+        target = Path(target)
+        legacy = legacy_app_data_dir()
+        if target == legacy or not legacy.is_dir():
+            return
+        if target.is_dir() and any(target.iterdir()):
+            return
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            for name in ('library.sqlite3', 'library.sqlite3-wal', 'library.sqlite3-shm'):
+                if (legacy / name).is_file():
+                    shutil.copy2(legacy / name, target / name)
+            for name in ('objects', 'cache'):
+                if (legacy / name).is_dir():
+                    shutil.copytree(legacy / name, target / name)
+            self._rewrite_legacy_paths(target, legacy, target)
+            self._reset_legacy_cache_path(target, legacy)
+        except OSError as error:
+            raise ValueError('迁移本地数据到 %s 失败：%s' % (target, error)) from None
+
+    @staticmethod
+    def _reset_legacy_cache_path(db_root, legacy):
+        """A cachePath copied from the legacy location must not point there anymore."""
+        import sqlite3
+        database = db_root / 'library.sqlite3'
+        if not database.is_file():
+            return
+        db = sqlite3.connect(database, timeout=10)
+        try:
+            with db:
+                row = db.execute('SELECT data FROM desktop_settings WHERE id=1').fetchone()
+                if not row:
+                    return
+                payload = json.loads(row[0])
+                cache_path = payload.get('cachePath', '')
+                if cache_path and str(legacy) in cache_path:
+                    payload['cachePath'] = ''
+                    db.execute('UPDATE desktop_settings SET data=? WHERE id=1',
+                               (json.dumps(payload, ensure_ascii=False),))
+        except (sqlite3.Error, json.JSONDecodeError, ValueError) as error:
+            raise ValueError('迁移后重置缓存目录失败：%s' % error) from None
+        finally:
+            db.close()
+
+    @staticmethod
+    def _rewrite_legacy_paths(db_root, legacy, target):
+        """Point migrated job records at the copied cache so old artifacts stay readable.
+
+        Values are replaced inside parsed JSON: raw-text matching would miss
+        Windows paths because JSON escapes every backslash.
+        """
+        import sqlite3
+        database = db_root / 'library.sqlite3'
+        if not database.is_file():
+            return
+        prefix_old, prefix_new = str(legacy), str(target)
+        db = sqlite3.connect(database, timeout=10)
+        try:
+            with db:
+                rows = db.execute('SELECT id, data FROM desktop_jobs').fetchall()
+                for identifier, data in rows:
+                    payload = json.loads(data)
+                    changed = False
+                    def walk(value):
+                        nonlocal changed
+                        if isinstance(value, str):
+                            if prefix_old in value:
+                                changed = True
+                                return value.replace(prefix_old, prefix_new)
+                            return value
+                        if isinstance(value, dict):
+                            return {key: walk(item) for key, item in value.items()}
+                        if isinstance(value, list):
+                            return [walk(item) for item in value]
+                        return value
+                    payload = walk(payload)
+                    if changed:
+                        db.execute('UPDATE desktop_jobs SET data=? WHERE id=?',
+                                   (json.dumps(payload, ensure_ascii=False), identifier))
+        except (sqlite3.Error, json.JSONDecodeError, ValueError) as error:
+            raise ValueError('迁移后改写任务路径失败：%s' % error) from None
+        finally:
+            db.close()
 
     def subscribe_jobs(self, callback):
         with self._lock:
@@ -101,7 +212,7 @@ class LocalService:
     def diagnostic_report(self):
         # Explicit local export excludes titles, paths, endpoints, model names, IDs and raw errors.
         return json.dumps({'schemaVersion': 1, 'python': platform.python_version(),
-            'platform': sys.platform, 'engines': {k:v[1] for k,v in VERSIONS.items()},
+            'platform': sys.platform, 'translation': 'arxiv-html-llm',
             'jobs': [{'engine':j['engine'],'state':j['state'],
                       'errorCode':j.get('errorCode') if j.get('errorCode') in ERROR_CODES else None,
                       'timeoutSeconds':j.get('timeoutSeconds',600)} for j in self.store.list_jobs()]}, indent=2)
@@ -145,11 +256,7 @@ class LocalService:
         worker = self.resources / 'integrations/parse_worker.py'
         if not worker.is_file():
             raise ValueError('安装包缺少本地文献解析组件。')
-        if getattr(sys, 'frozen', False):
-            runtime = self.resources / 'runtime/babeldoc'
-            python = runtime / ('python.exe' if os.name == 'nt' else 'bin/python3')
-        else:
-            python = Path(sys.executable)
+        python = Path(sys.executable)
         if not python.is_file():
             raise ValueError('内置文献解析运行环境缺失。')
         identifier = 'parse-' + str(uuid.uuid4())
@@ -197,53 +304,6 @@ class LocalService:
     def document_blocks(self, document_id, revision_id=None):
         return self.store.document_blocks(document_id, revision_id)
 
-    def save_claim(self, document_id, text, evidence):
-        return self.store.save_claim(document_id, text, evidence)
-
-    def list_claims(self, document_id):
-        return self.store.list_claims(document_id)
-
-    def summarize_document(self, document_id, block_ids, revision_id=None, expected_settings=None):
-        """Send only explicitly selected current blocks; atomically save checked claims."""
-        with self._lock:
-            if self._closed:
-                raise ValueError('应用正在关闭。')
-            token = self._key
-            settings = self.store.get_settings()
-        if expected_settings is not None and expected_settings != {k: settings[k] for k in ('endpoint', 'model', 'targetLanguage')}:
-            raise ValueError('模型配置已变更，请确认发送范围后重新生成。')
-        if not token:
-            raise ValueError('请先设置会话 API 密钥。')
-        address = endpoint_url(settings['endpoint'])
-        current = self.store.current_document_ir(document_id)
-        if not current or current['status'] != 'ready':
-            raise ValueError('请先提取本地文献文本。')
-        if revision_id is not None and revision_id != current['id']:
-            raise ValueError('所选解析版本已失效，请刷新后重新选择。')
-        revision_id = current['id']
-        blocks = selected_blocks(self.store.document_blocks(document_id, revision_id), block_ids)
-        if getattr(sys, 'frozen', False):
-            python = self.resources / 'runtime/babeldoc' / ('python.exe' if os.name == 'nt' else 'bin/python3')
-        else:
-            python = Path(sys.executable)
-        identifier = 'summary-' + str(uuid.uuid4())
-        def started(child):
-            with self._lock:
-                if self._closed:
-                    raise ValueError('应用正在关闭。')
-                self._children[identifier] = child
-        def finished(child):
-            with self._lock:
-                self._children.pop(identifier, None)
-        claims, usage = request_summary(address, token, settings['model'], settings['targetLanguage'], blocks,
-            min(settings['timeoutSeconds'], 120), python_path=python,
-            worker_path=self.resources / 'integrations/summary_worker.py', on_spawn=started, on_done=finished)
-        with self._lock:
-            if self._closed:
-                raise ValueError('应用正在关闭，摘要结果未保存。')
-            return self.store.save_model_summary(document_id, revision_id, claims, settings['model'], usage,
-                                                 input_block_ids=[b['id'] for b in blocks])
-
     def list_collections(self):
         return self.store.list_collections()
 
@@ -289,8 +349,41 @@ class LocalService:
                                (document['id'],)).fetchone()
         return self.store.document(owner[0]) if owner else document
 
+    def arxiv_lookup(self, query, endpoint=None):
+        identifiers = arxiv_client.parse_identifiers(query)
+        if not identifiers:
+            raise ValueError('未识别到 arXiv 编号；请粘贴 arxiv.org 链接或编号，每行一个。')
+        if len(identifiers) > arxiv_client.MAX_ENTRIES:
+            raise ValueError('一次最多查询 %d 篇。' % arxiv_client.MAX_ENTRIES)
+        return arxiv_client.fetch_metadata(identifiers, endpoint or arxiv_client.API_URL)
+
+    def arxiv_import(self, entries, collection_id=None):
+        """Download and import checked arXiv entries; per-entry errors are sanitized."""
+        return arxiv_client.import_batch(self, entries, collection_id)
+
     def update_document(self, document_id, patch):
         return self.store.update_document(document_id, patch)
+
+    def set_scores(self, document_id, entries):
+        """Persist AI scores for a paper; ready for MCP/CLI writers later."""
+        return self.store.set_scores(document_id, entries)
+
+    def document_scores(self, document_id):
+        return self.store.document_scores(document_id)
+
+    def set_score_report(self, document_id, kind, agent_id, data_text):
+        """Archive one blind-review judge report verbatim (first-class artifact)."""
+        return self.store.set_score_report(document_id, kind, agent_id, data_text)
+
+    def score_reports(self, document_id, kind, agent_id=None):
+        return self.store.score_reports(document_id, kind, agent_id)
+
+    def document(self, document_id):
+        """Public single-document lookup (metadata + scores exposure for CLI/MCP)."""
+        document = self.store.document(document_id)
+        document['scores'] = {kind: (value or {}).get('score') if isinstance(value, dict) else None
+                              for kind, value in self.store.document_scores(document_id).items()}
+        return document
 
     def delete_document(self, document_id):
         return self.store.delete_document(document_id)
@@ -300,8 +393,6 @@ class LocalService:
 
     def get_settings(self):
         settings = self.store.get_settings()
-        discovered = self.discover_engine(settings['engine'])
-        settings['pythonPath'] = discovered['pythonPath']
         if not settings['cachePath']:
             settings['cachePath'] = str(self.store.prepare_cache(''))
         return settings
@@ -315,39 +406,49 @@ class LocalService:
         with self._lock:
             self._key = key
 
-    def discover_engine(self, engine):
-        if engine not in VERSIONS:
-            return dict(pythonPath='', available=False, message='不支持的翻译引擎。')
-        package, expected = VERSIONS[engine]
-        candidates = []
-        # Both released bundles and repository staging contain independent interpreters.
-        for directory in (self.resources / 'runtime' / engine, self.resources / '.runtime' / engine):
-            if os.name == 'nt':
-                candidates.extend((directory / 'python.exe', directory / 'Scripts/python.exe'))
-            else:
-                candidates.extend((directory / 'bin/python3', directory / 'bin/python'))
-        for python in candidates:
-            if not python.is_file():
-                continue
-            try:
-                result = subprocess.run([str(python), '-I', '-c',
-                    f'import importlib.metadata; print(importlib.metadata.version({package!r}))'],
-                    env=environment(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    timeout=10, check=False)
-                if result.returncode == 0 and result.stdout.strip() == expected.encode():
-                    return dict(pythonPath=str(python), available=True, message=f'已发现自带 {engine} {expected} 独立 Python 运行环境。')
-            except (OSError, subprocess.TimeoutExpired):
-                continue
-        return dict(pythonPath='', available=False,
-                    message='此安装包尚未包含完整且匹配版本的内置引擎运行环境。请安装包含运行环境的正式包；无需配置系统 Python。')
+    def store_api_key(self, key, mode='os'):
+        """Validate, activate for this session and persist per the chosen mode.
+
+        mode='os' writes the OS credential store; mode='file' writes the plain
+        agent-style config file, an explicit user choice whose risks are documented.
+        """
+        self.set_session_key(key)
+        if mode == 'file':
+            secrets.store_secret_file(key)
+        else:
+            secrets.store_secret(key)
+
+    def clear_stored_api_key(self):
+        secrets.clear_secret()
+        secrets.clear_secret_file()
+
+    def api_key_stored(self):
+        return secrets.load_secret() is not None
+
+    def stored_key_location(self):
+        if self.api_key_stored():
+            return 'os'
+        if secrets.load_secret_file():
+            return 'file'
+        return None
+
+    def _effective_key(self):
+        # Session key wins; otherwise fall back to stored credentials (store, then file).
+        with self._lock:
+            if self._key:
+                return self._key
+        stored = secrets.load_secret() or secrets.load_secret_file() or ''
+        if stored:
+            with self._lock:
+                self._key = stored
+        return stored
 
     def list_models(self, endpoint=None, key=None):
         """GET configured OpenAI-compatible /models; returns list[str]. GUI runs in QThread."""
         address = endpoint_url(endpoint if endpoint is not None else self.store.get_settings()['endpoint'])
-        with self._lock:
-            token = self._key if key is None else key
+        token = key if key is not None else self._effective_key()
         if not isinstance(token, str) or not token or len(token) > 16384 or any(ord(c) < 32 for c in token):
-            raise ValueError('请先设置会话 API 密钥。')
+            raise ValueError('请先设置或记住 API 密钥。')
         request = Request(address + '/models', headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json'}, method='GET')
         try:
             with build_opener(NoRedirect()).open(request, timeout=15) as response:
@@ -369,120 +470,131 @@ class LocalService:
     def list_jobs(self):
         return self.store.list_jobs()
 
+    def delete_job(self, job_id):
+        """Delete a finished job record; in-flight jobs are owned by this service."""
+        with self._lock:
+            if job_id in self._threads:
+                raise ValueError('任务仍在进行中，结束后再删除记录。')
+        return self.store.delete_job(job_id)
+
+    def job_output_dir(self, job_id):
+        """Real output directory of a completed job, for 'open folder' in the UI."""
+        job = next((j for j in self.store.list_jobs() if j['id'] == job_id), None)
+        if not job:
+            raise ValueError('任务记录不存在。')
+        if job['state'] != 'completed':
+            raise ValueError('任务尚未完成。')
+        output = Path(job['outputDir'])
+        # Only ever expose a UUID-named directory the application itself created.
+        if output.name != job_id or output.parent.name != 'jobs' or not output.is_dir():
+            raise ValueError('任务产物目录不存在。')
+        return output
+
+    def attachment_file_path(self, document_id):
+        """Local object path of a library PDF, for 'open with default app'."""
+        document = self.store.document(document_id)
+        return self.store.object_path(document)
+
     def start_translation(self, document_id, pages=''):
-        if not isinstance(pages, str) or len(pages) > 4096:
-            raise ValueError('页码范围无效。')
-        if pages:
-            for item in pages.split(','):
-                if not re.fullmatch(r'[1-9][0-9]*(?:-[1-9][0-9]*)?', item):
-                    raise ValueError('页码范围无效。')
-                bounds = [int(v) for v in item.split('-')]
-                if len(bounds) == 2 and bounds[0] > bounds[1]:
-                    raise ValueError('页码范围倒置。')
+        """Translate an arXiv paper into a bilingual HTML artifact.
+
+        The HTML pipeline always covers the full text; `pages` is accepted for
+        UI compatibility and intentionally ignored.
+        """
         settings = self.store.get_settings()
         endpoint_url(settings['endpoint'])
-        discovery = self.discover_engine(settings['engine'])
-        if not discovery['available']:
-            raise ValueError(discovery['message'])
         if not settings['model'].strip():
             raise ValueError('请先选择或填写模型名称。')
-        worker = self.resources / 'integrations/job_worker.py'
-        if not worker.is_file():
-            raise ValueError('安装包缺少内置工作进程。')
         with self._lock:
             if self._closed:
                 raise ValueError('应用正在关闭。')
-            if not self._key:
-                raise ValueError('请先设置仅当前会话使用的 API 密钥。')
+            api_key = self._effective_key()
+            if not api_key:
+                raise ValueError('请先设置或记住 API 密钥。')
             document = self.store.document(document_id)
-            job = self.store.new_job(document_id, settings['engine'])
-            payload = dict(protocol_version=1, job_id=job['id'], engine=settings['engine'], python=discovery['pythonPath'],
-                source=str(self.store.object_path(document)), output=job['outputDir'], endpoint=settings['endpoint'], model=settings['model'],
-                api_key=self._key, source_language=settings['sourceLanguage'], target_language=settings['targetLanguage'], pages=pages,
-                timeout=job['timeoutSeconds'], allow_document_upload=True, allow_asset_download=True)
-            thread = threading.Thread(target=self._run, args=(job.copy(), payload, worker), daemon=True, name='polyscholar-engine')
+            identifier = arxiv_client.parse_identifier(document.get('url') or '')
+            if not identifier:
+                raise ValueError('HTML 翻译仅支持带 arXiv 链接的文献；请通过 arXiv 导入。')
+            job = self.store.new_job(document_id, 'html-llm')
+            thread = threading.Thread(target=self._run_html,
+                args=(job.copy(), identifier, settings['endpoint'], settings['model'], api_key),
+                daemon=True, name='polyscholar-html')
             self._threads[job['id']] = thread
             thread.start()
             return job
 
-    def _run(self, job, payload, worker):
-        child = None
+    def _write_partial_html(self, job, html_partial):
+        """Progressive reading: rewrite the artifact as completed blocks arrive (throttled)."""
+        cache = getattr(self, '_partial_ts', None)
+        if cache is None:
+            cache = self._partial_ts = {}
+        now = time.monotonic()
+        if now - cache.get(job['id'], 0.0) < 2.0:
+            return
+        cache[job['id']] = now
+        (Path(job['outputDir']) / 'translated.html').write_text(html_partial, encoding='utf-8')
+
+    def _run_html(self, job, identifier, endpoint, model, api_key):
         try:
             job['state'] = 'running'
             self.store.put_job(job)
             self._notify_job(job)
-            Path(job['outputDir']).parent.mkdir(parents=True, exist_ok=True)
-            with self._lock:
-                if self._closed:
-                    raise ValueError()
-                child = subprocess.Popen([payload['python'], '-I', str(worker)], env=environment(),
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                self._children[job['id']] = child
-            request = json.dumps(payload, ensure_ascii=False).encode() + b'\n'
-            if len(request) > MAX_EVENT:
-                raise ValueError()
-            child.stdin.write(request)
-            child.stdin.close()
-            payload['api_key'] = ''
-            completed = False
-            while True:
-                line = child.stdout.readline(MAX_EVENT + 1)
-                if not line:
-                    break
-                if len(line) > MAX_EVENT:
-                    raise ValueError()
-                event = json.loads(line)
-                if not isinstance(event, dict) or event.get('protocol_version') != 1 or event.get('job_id') != job['id']:
-                    raise ValueError()
-                if event.get('event') not in ('started','progress','completed','failed'):
-                    raise ValueError()
-                metrics = self._event_metrics(event)
-                if metrics:
-                    job.update(metrics)
-                    self.store.put_job(job)
-                    self._notify_job(job)
-                if event.get('event') == 'failed':
-                    code = event.get('error_code')
-                    job['errorCode'] = code if code in ERROR_CODES else 'protocol_error'
-                    raise ValueError()
-                if event.get('event') == 'completed':
-                    completed = True
-            if child.wait(timeout=15) != 0 or not completed:
-                raise ValueError()
             output = Path(job['outputDir'])
-            artifacts = sorted(p.name for p in output.glob('*.pdf') if p.is_file() and not p.is_symlink())
-            if not artifacts:
-                raise ValueError()
-            for artifact in artifacts:
-                self.store.read_bounded_pdf(output / artifact)
-            job.update(state='completed', artifacts=artifacts)
-        except Exception:
-            # Never retain raw exceptions, engine output, provider bodies, credentials or PDF text.
-            job.setdefault('errorCode', 'protocol_error')
-            job.update(state='failed', error='翻译任务未完成。请检查内置引擎、模型设置与网络后重试；已发送的 API 请求可能计费。')
+            output.mkdir(parents=True, exist_ok=True)
+            artifact = output / 'translated.html'
+            def write_partial(html_partial):
+                self._write_partial_html(job, html_partial)
+            def progress(current, total):
+                job['progress'] = {'current': current, 'total': total}
+                self.store.put_job(job)
+            html, _total, translated = html_translate.translate_paper(
+                identifier, endpoint, model, api_key, progress=progress, on_partial=write_partial)
+            artifact.write_text(html, encoding='utf-8')
+            if '</html>' not in html or not html.strip():
+                raise ValueError('译文 HTML 未生成。')
+            job.update(state='completed', artifacts=['translated.html'],
+                       translatedBlocks=translated, totalBlocks=_total)
+        except Exception as error:
+            # Never retain raw exceptions, provider bodies, credentials or paper text.
+            import os as _os, traceback as _tb
+            if _os.environ.get('POLYSCHOLAR_DEBUG_TRACE'):
+                import sys as _sys
+                print(_tb.format_exc(), file=_sys.stderr, flush=True)
+            job.setdefault('errorCode', 'engine_failed')
+            job.update(state='failed', error='HTML 翻译未完成。请检查模型设置与网络后重试；已发送的 API 请求可能计费。')
         finally:
-            payload['api_key'] = ''
-            if child:
-                try:
-                    self._stop(child)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
-                if child.stdout:
-                    child.stdout.close()
-            # Retain the thread until all database writes close, so shutdown can join it.
             try:
                 self.store.put_job(job)
                 self.store.audit('translation_finished', 'succeeded' if job['state'] == 'completed' else 'failed')
                 self._notify_job(job)
             finally:
                 with self._lock:
-                    self._children.pop(job['id'], None)
                     self._threads.pop(job['id'], None)
                     if self._closed and not self._threads:
                         self.store.close()
 
+    def artifact_file(self, job_id, artifact_index=0):
+        """Bounded bytes of a completed job artifact; HTML jobs have no PDF output."""
+        job = next((j for j in self.store.list_jobs() if j['id'] == job_id), None)
+        if not job or job['state'] != 'completed':
+            raise ValueError('翻译任务尚未成功完成。')
+        name = job['artifacts'][artifact_index] if 0 <= artifact_index < len(job.get('artifacts') or []) else None
+        if not name:
+            raise ValueError('译文产物不存在。')
+        output = Path(job['outputDir'])
+        candidate = output / name
+        if candidate.name != name or candidate.is_symlink() or not candidate.is_file():
+            raise ValueError('译文产物不存在。')
+        if candidate.suffix.lower() == '.pdf':
+            return self.store.read_bounded_pdf(candidate)
+        data = candidate.open('rb').read(24 * 1024 * 1024 + 1)
+        if len(data) > 24 * 1024 * 1024:
+            raise ValueError('译文超过 24 MiB 上限。')
+        return data
+
     @staticmethod
     def _stop(child):
+        # Still used by the parse/summary worker subprocesses (not translation).
         if child.poll() is not None:
             return
         try:
@@ -498,9 +610,58 @@ class LocalService:
     def read_artifact_pdf(self, job_id, artifact_index=0):
         return self.store.read_bounded_pdf(self.store.artifact_path(job_id, artifact_index))
 
+    def document_translations(self, document_id):
+        """All completed HTML translations belonging to a document (including
+        its child attachments), newest first. The translation belongs to the
+        paper, not to the task record that produced it."""
+        document = self.store.document(document_id)
+        identifiers = {document_id}
+        with self.store.connection() as db:
+            for (child,) in db.execute(
+                    'SELECT child_document_id FROM desktop_attachment_links WHERE parent_document_id=?',
+                    (document_id,)):
+                identifiers.add(child)
+        result = []
+        for job in self.store.list_jobs():
+            if job.get('state') != 'completed' or job.get('documentId') not in identifiers:
+                continue
+            for index, name in enumerate(job.get('artifacts') or []):
+                if not name.lower().endswith('.html'):
+                    continue
+                try:
+                    path = self.store.artifact_path(job['id'], index, kinds=('.html',))
+                except ValueError:
+                    continue
+                result.append(dict(jobId=job['id'], index=index, path=str(path),
+                                   createdAt=job.get('createdAt', '')))
+        result.sort(key=lambda item: item['createdAt'], reverse=True)
+        return result
+
+    def open_translation(self, document_id):
+        """Newest translation of a document, ready for the system browser."""
+        translations = self.document_translations(document_id)
+        if not translations:
+            raise ValueError('该文献还没有中文译文；请先在翻译任务页创建翻译。')
+        return Path(translations[0]['path'])
+
+    def artifact_path(self, job_id, artifact_index, kinds=('.pdf',)):
+        return self.store.artifact_path(job_id, artifact_index, kinds=kinds)
+
     def export_translation(self, job_id, artifact_index, path):
-        source=self.store.artifact_path(job_id,artifact_index)
-        self.store.write_export(path,self.store.read_bounded_pdf(source),extra_protected=[self.resources])
+        """Export a finished artifact; PDF keeps its checks, HTML gets a text-safe copy."""
+        job = next((j for j in self.store.list_jobs() if j['id'] == job_id), None)
+        if not job:
+            raise ValueError('任务记录不存在。')
+        name = (job.get('artifacts') or [None])[artifact_index] if 0 <= artifact_index < len(job.get('artifacts') or []) else None
+        if name and str(name).lower().endswith('.html'):
+            source = self.store.artifact_path(job_id, artifact_index, kinds=('.html',))
+            data = source.read_bytes()
+            if len(data) > 24 * 1024 * 1024:
+                raise ValueError('译文超过 24 MiB 上限。')
+            self.store.write_export(path, data, extra_protected=[self.resources])
+        else:
+            source = self.store.artifact_path(job_id, artifact_index)
+            self.store.write_export(path, self.store.read_bounded_pdf(source), extra_protected=[self.resources])
         self.store.audit('artifact_exported')
 
     def export_metadata(self, document_ids, format, path):

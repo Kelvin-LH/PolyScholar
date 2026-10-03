@@ -40,13 +40,11 @@ class FulltextVectorTests(unittest.TestCase):
 
     def test_reparse_clear_rebuild_and_restart_never_search_old_revisions(self):
         old = self.replace(self.parent, 'obsolete text')
-        self.service.store.save_claim(self.parent['id'], 'Retained note', [])
         latest = self.replace(self.parent, 'current text')
         self.assertNotEqual(old['id'], latest['id'])
         self.assertEqual(self.service.search_fulltext('obsolete')['total'], 0)
         self.service.clear_fulltext_index(self.parent['id'])
         self.assertEqual(self.service.search_fulltext('current')['total'], 0)
-        self.assertEqual(len(self.service.store.list_claims(self.parent['id'])), 1)
         self.assertEqual(self.service.store.current_document_ir(self.parent['id'])['id'], latest['id'])
         self.service.close(); self.service = LocalService(self.root / 'data'); self.addCleanup(self.service.close)
         self.assertEqual(self.service.search_fulltext('current')['total'], 0)

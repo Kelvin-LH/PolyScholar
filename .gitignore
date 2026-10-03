@@ -10,6 +10,7 @@ node_modules/
 *.db-wal
 *.db-shm
 /private-data/
+/data/
 /provenance.json
 
 .venvs/
@@ -27,3 +28,7 @@ desktop/dist/
 /dist/
 *.spec
 *.egg-info/
+
+.pytest_cache/
+logs/
+*.lock

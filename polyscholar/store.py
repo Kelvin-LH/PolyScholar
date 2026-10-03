@@ -21,11 +21,20 @@ from .searches import SearchLibrary, SEARCH_SCHEMA
 from .fulltext import FulltextLibrary, FULLTEXT_SCHEMA, index_current_ir
 from .metadata import BIB_FIELDS, metadata_patch
 
-AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt'})
+AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','job_deleted','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt','score_updated','score_report_imported'})
 
 MAX_PDF = 100 * 1024 * 1024
-SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeldoc',
-                pythonPath='', cachePath='', sourceLanguage='en', targetLanguage='zh', doiEnabled=False, timeoutSeconds=600)
+SCORE_REPORT_MAX_BYTES = 1024 * 1024
+
+# desktop_scores 的列与约束只有这一份定义:新建库与迁移重建共用同一份文本。
+# 此前的回归正是定义漂移造成的——代码里加了 summary 类型,但老库的既有表
+# 不会因 CREATE TABLE IF NOT EXISTS 而更新约束,迁移必须显式重建。
+SCORES_COLUMNS = "document_id TEXT NOT NULL REFERENCES desktop_documents(id) ON DELETE CASCADE,\n                    kind TEXT NOT NULL CHECK(kind IN ('paper','confidence','summary')),\n                    score REAL CHECK(score IS NULL OR (score>=0 AND score<=100)),\n                    rationale TEXT NOT NULL DEFAULT '',\n                    detail TEXT NOT NULL DEFAULT '{}',\n                    created_at TEXT NOT NULL,\n                    updated_at TEXT NOT NULL,\n                    PRIMARY KEY(document_id,kind)"
+DESKTOP_SCORES_DDL = ('CREATE TABLE IF NOT EXISTS desktop_scores(' + SCORES_COLUMNS + ');'
+                      'CREATE INDEX IF NOT EXISTS desktop_scores_rank ON desktop_scores(kind,score);')
+SCHEMA_VERSION = 12
+SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='html-llm',
+                pythonPath='', cachePath='', sourceLanguage='en', targetLanguage='zh', doiEnabled=False, timeoutSeconds=600, keyStorage='')
 
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
@@ -53,78 +62,29 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
         self.objects.mkdir(exist_ok=True)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version > 8:
+            if version > SCHEMA_VERSION:
                 raise ValueError('本地数据库来自更新版本，请升级应用。')
-            if version == 1:
-                backup = self.root / 'library-before-v2.sqlite3'
+            # 每个历史版本在升级前各留一份全库备份;循环取代逐版本复制的块,
+            # 新增迁移时只需提升 SCHEMA_VERSION 并追加对应的数据搬迁步骤。
+            for target in range(2, SCHEMA_VERSION + 1):
+                if not 0 < version < target:
+                    continue
+                backup = self.root / ('library-before-v%d.sqlite3' % target)
                 if not backup.exists():
-                    target = sqlite3.connect(backup)
+                    handle = sqlite3.connect(backup)
                     try:
-                        db.backup(target)
+                        db.backup(handle)
                     finally:
-                        target.close()
+                        handle.close()
                     if os.name == 'posix':
                         backup.chmod(0o600)
-            if version in (1,2):
-                backup = self.root / 'library-before-v3.sqlite3'
-                if not backup.exists():
-                    target = sqlite3.connect(backup)
-                    try:
-                        db.backup(target)
-                    finally:
-                        target.close()
-                    if os.name == 'posix':
-                        backup.chmod(0o600)
-            if version in (1, 2, 3):
-                backup = self.root / 'library-before-v4.sqlite3'
-                if not backup.exists():
-                    target = sqlite3.connect(backup)
-                    try:
-                        db.backup(target)
-                    finally:
-                        target.close()
-                    if os.name == 'posix':
-                        backup.chmod(0o600)
-            if version in (1, 2, 3, 4):
-                backup = self.root / 'library-before-v5.sqlite3'
-                if not backup.exists():
-                    target = sqlite3.connect(backup)
-                    try:
-                        db.backup(target)
-                    finally:
-                        target.close()
-                    if os.name == 'posix':
-                        backup.chmod(0o600)
-            if version in (1, 2, 3, 4, 5):
-                backup = self.root / 'library-before-v6.sqlite3'
-                if not backup.exists():
-                    target = sqlite3.connect(backup)
-                    try:
-                        db.backup(target)
-                    finally:
-                        target.close()
-                    if os.name == 'posix':
-                        backup.chmod(0o600)
-            if version in (1, 2, 3, 4, 5, 6):
-                backup = self.root / 'library-before-v7.sqlite3'
-                if not backup.exists():
-                    target = sqlite3.connect(backup)
-                    try:
-                        db.backup(target)
-                    finally:
-                        target.close()
-                    if os.name == 'posix':
-                        backup.chmod(0o600)
-            if version in (1, 2, 3, 4, 5, 6, 7):
-                backup = self.root / 'library-before-v8.sqlite3'
-                if not backup.exists():
-                    target = sqlite3.connect(backup)
-                    try:
-                        db.backup(target)
-                    finally:
-                        target.close()
-                    if os.name == 'posix':
-                        backup.chmod(0o600)
+            if 0 < version < 11:
+                # v11 removes the evidence-summary feature; saved claims only
+                # survive in the pre-migration backup, never silently deleted.
+                db.executescript('DROP TABLE IF EXISTS desktop_claim_provenance;'
+                                 'DROP TABLE IF EXISTS desktop_model_summaries;'
+                                 'DROP TABLE IF EXISTS desktop_claim_evidence;'
+                                 'DROP TABLE IF EXISTS desktop_claims;')
             db.executescript('''
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS desktop_documents(id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, data TEXT NOT NULL);
@@ -138,6 +98,15 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
                     collection_id TEXT NOT NULL REFERENCES desktop_collections(id) ON DELETE CASCADE,
                     PRIMARY KEY(document_id,collection_id));
                 CREATE INDEX IF NOT EXISTS desktop_memberships_collection ON desktop_memberships(collection_id);
+                '''+DESKTOP_SCORES_DDL+'''
+                CREATE TABLE IF NOT EXISTS desktop_score_reports(
+                    document_id TEXT NOT NULL REFERENCES desktop_documents(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL CHECK(kind IN ('paper','confidence','summary')),
+                    agent_id TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(document_id,kind,agent_id));
             ''')
             db.executescript('BEGIN IMMEDIATE;\n' + IR_SCHEMA + '\n' + ATTACHMENT_SCHEMA + '\n' + SEARCH_SCHEMA + '\n' + FULLTEXT_SCHEMA)
             if version < 8:
@@ -149,7 +118,18 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
                 db.execute(f"CREATE TRIGGER IF NOT EXISTS desktop_audit_validate_{action.lower()} BEFORE {action} ON desktop_audit "
                            f"WHEN NEW.point NOT IN ({values}) OR NEW.outcome NOT IN ('succeeded','failed') "
                            "BEGIN SELECT RAISE(ABORT, 'Invalid audit event'); END")
-            db.execute('PRAGMA user_version=8')
+            if 0 < version < 12:
+                # v12 重建 desktop_scores:summary 的 CHECK 是定义后来才加的,而
+                # CREATE TABLE IF NOT EXISTS 不会改既有表的约束,旧库会拒绝提炼
+                # 写入。列数据原样搬迁;升级前的全量备份为 library-before-v12。
+                db.executescript('CREATE TABLE desktop_scores_v12(' + SCORES_COLUMNS + ');'
+                                 'INSERT INTO desktop_scores_v12 SELECT '
+                                 'document_id,kind,score,rationale,detail,created_at,updated_at FROM desktop_scores;'
+                                 'DROP TABLE desktop_scores;'
+                                 'ALTER TABLE desktop_scores_v12 RENAME TO desktop_scores;'
+                                 'DROP INDEX IF EXISTS desktop_scores_rank;'
+                                 'CREATE INDEX desktop_scores_rank ON desktop_scores(kind,score);')
+            db.execute('PRAGMA user_version=12')
         for job in self.list_jobs():
             if job['state'] in ('queued', 'running'):
                 job.update(state='failed', error='上次退出时任务未完成，请重新提交；远程请求可能已计费。')
@@ -175,7 +155,130 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
 
     def list_documents(self):
         with self.connection() as db:
-            return [json.loads(row[0]) for row in db.execute('SELECT data FROM desktop_documents ORDER BY rowid DESC')]
+            documents = [json.loads(row[0]) for row in db.execute('SELECT data FROM desktop_documents ORDER BY rowid DESC')]
+            scores = dict(self._score_map(db))
+        for document in documents:
+            document['scores'] = scores.get(document['id'], {})
+        return documents
+
+    @staticmethod
+    def _score_map(db):
+        """{document_id: {'paper': 87.5, 'confidence': None}} for list sorting."""
+        result = {}
+        for document_id, kind, score in db.execute('SELECT document_id,kind,score FROM desktop_scores'):
+            result.setdefault(document_id, {})[kind] = score
+        return result
+
+    def set_scores(self, document_id, entries):
+        """Upsert agent scores. entries: [{'kind','score','rationale','detail'}].
+
+        detail is the machine-readable sub-agent report (dimensions, strengths,
+        weaknesses, model, rubric version); rationale is the human-readable
+        得分/失分理由. Existing rows for the same kind are replaced.
+        """
+        self.document(document_id)
+        if not isinstance(entries, list) or not 1 <= len(entries) <= 3:
+            raise ValueError('评分条目无效。')
+        prepared = []
+        for entry in entries:
+            if not isinstance(entry, dict) or set(entry) - {'kind', 'score', 'rationale', 'detail'}:
+                raise ValueError('评分字段无效。')
+            kind = entry.get('kind')
+            if kind not in ('paper', 'confidence', 'summary'):
+                raise ValueError('评分类型必须是 paper、confidence 或 summary。')
+            score = entry.get('score')
+            if score is not None:
+                if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 100:
+                    raise ValueError('分数必须在 0–100 之间。')
+                score = float(score)
+            rationale = entry.get('rationale', '')
+            detail = entry.get('detail', '{}')
+            if not isinstance(rationale, str) or len(rationale.encode('utf-8')) > 65536:
+                raise ValueError('评分理由必须是不超过 64 KiB 的文本。')
+            if not isinstance(detail, str) or len(detail.encode('utf-8')) > 262144:
+                raise ValueError('评分明细 JSON 不能超过 256 KiB。')
+            if detail.strip():
+                try:
+                    json.loads(detail)
+                except json.JSONDecodeError:
+                    raise ValueError('评分明细必须是有效 JSON。') from None
+            else:
+                detail = '{}'
+            prepared.append((document_id, kind, score, rationale, detail))
+        with self.lock:
+            with self.connection() as db:
+                db.execute('BEGIN IMMEDIATE')
+                for document_id, kind, score, rationale, detail in prepared:
+                    db.execute('INSERT INTO desktop_scores(document_id,kind,score,rationale,detail,created_at,updated_at) '
+                               'VALUES(?,?,?,?,?,?,?) '
+                               'ON CONFLICT(document_id,kind) DO UPDATE SET score=excluded.score,'
+                               'rationale=excluded.rationale,detail=excluded.detail,updated_at=excluded.updated_at',
+                               (document_id, kind, score, rationale, detail, timestamp(), timestamp()))
+            self.audit('score_updated')
+        return self.document_scores(prepared[0][0])
+
+    def document_scores(self, document_id):
+        result = {'paper': None, 'confidence': None, 'summary': None}
+        with self.connection() as db:
+            for kind, score, rationale, detail in db.execute(
+                    'SELECT kind,score,rationale,detail FROM desktop_scores WHERE document_id=?', (document_id,)):
+                result[kind] = dict(score=score, rationale=rationale, detail=json.loads(detail) if detail else {})
+        return result
+
+    def set_score_report(self, document_id, kind, agent_id, data_text):
+        """Archive one blind-review agent report verbatim, keyed by agent slot.
+
+        评委原文按 (document, kind, agent) 归档,与 desktop_scores 的分数行分离:
+        detail 里内嵌的 original_output 受 256 KiB 限制,归档表不设实质上限,
+        保存后可经 `score reports` 原样读回。
+        """
+        self.document(document_id)
+        if kind not in ('paper', 'confidence', 'summary'):
+            raise ValueError('评分类型必须是 paper、confidence 或 summary。')
+        agent = (agent_id or '').strip()
+        if not agent or len(agent) > 64 or any(ch in agent for ch in '\r\n\t'):
+            raise ValueError('agent 标识必须是 1–64 个可见字符。')
+        if not isinstance(data_text, str) or not data_text.strip():
+            raise ValueError('报告必须是非空 JSON 文本。')
+        if len(data_text.encode('utf-8')) > SCORE_REPORT_MAX_BYTES:
+            raise ValueError('单份评委报告不能超过 1 MiB。')
+        try:
+            parsed = json.loads(data_text)
+        except json.JSONDecodeError:
+            raise ValueError('评委报告必须是有效 JSON。') from None
+        if not isinstance(parsed, dict):
+            raise ValueError('评委报告必须是 JSON 对象。')
+        digest = hashlib.sha256(data_text.encode('utf-8')).hexdigest()
+        with self.lock:
+            with self.connection() as db:
+                db.execute('BEGIN IMMEDIATE')
+                db.execute('INSERT INTO desktop_score_reports(document_id,kind,agent_id,sha256,data,created_at) '
+                           'VALUES(?,?,?,?,?,?) ON CONFLICT(document_id,kind,agent_id) DO UPDATE SET '
+                           'sha256=excluded.sha256,data=excluded.data,created_at=excluded.created_at',
+                           (document_id, kind, agent, digest, data_text, timestamp()))
+        self.audit('score_report_imported')
+        return dict(documentId=document_id, kind=kind, agentId=agent, sha256=digest,
+                    bytes=len(data_text.encode('utf-8')))
+
+    def score_reports(self, document_id, kind, agent_id=None):
+        """List archived reports; with agent_id, return the verbatim text too."""
+        if kind not in ('paper', 'confidence', 'summary'):
+            raise ValueError('评分类型必须是 paper、confidence 或 summary。')
+        query = ('SELECT agent_id,sha256,data,created_at FROM desktop_score_reports '
+                 'WHERE document_id=? AND kind=?')
+        parameters = [document_id, kind]
+        if agent_id:
+            query += ' AND agent_id=?'
+            parameters.append(agent_id.strip())
+        query += ' ORDER BY agent_id'
+        rows = []
+        with self.connection() as db:
+            for agent, digest, data, created in db.execute(query, parameters):
+                row = dict(agentId=agent, sha256=digest, bytes=len(data.encode('utf-8')), createdAt=created)
+                if agent_id:
+                    row['data'] = json.loads(data)
+                rows.append(row)
+        return rows
 
     def document(self, document_id):
         with self.connection() as db:
@@ -266,7 +369,7 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
                 raise
 
     def update_document(self, document_id, patch):
-        fields = {'title', 'authors', 'doi', 'year', 'tags', 'notes', 'itemType', 'creators', *BIB_FIELDS}
+        fields = {'title', 'authors', 'doi', 'year', 'tags', 'notes', 'itemType', 'creators', 'abstract', 'url', *BIB_FIELDS}
         if not isinstance(patch, dict) or set(patch) - fields:
             raise ValueError('文献修改字段无效。')
         for key, value in patch.items():
@@ -390,8 +493,8 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
                     raise ValueError('DOI 开关无效。')
             elif not isinstance(value, str) or len(value) > 16384 or any(ord(c) < 32 for c in value):
                 raise ValueError('设置参数无效。')
-        if merged['engine'] not in ('babeldoc', 'pdfmathtranslate'):
-            raise ValueError('不支持的翻译引擎。')
+        if merged['keyStorage'] not in ('', 'os', 'file'):
+            raise ValueError('密钥存储方式无效。')
         try:
             endpoint = urlsplit(merged['endpoint'])
             local = endpoint.hostname in ('localhost', '127.0.0.1', '::1')
@@ -420,7 +523,7 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
                        (job['id'], job['documentId'], job['state'], json.dumps(job, ensure_ascii=False)))
 
     def new_job(self, document_id, engine):
-        if engine not in ('babeldoc', 'pdfmathtranslate'):
+        if engine not in ('html-llm', 'babeldoc', 'pdfmathtranslate'):
             raise ValueError('不支持的翻译引擎。')
         self.document(document_id)
         identifier = str(uuid.uuid4())
@@ -434,10 +537,35 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
             db.execute('INSERT INTO desktop_jobs VALUES(?,?,?,?)', (identifier, document_id, 'queued', json.dumps(job)))
         return job
 
+    def delete_job(self, job_id):
+        """Remove a finished job record and its owned output directory.
+
+        Active (queued/running) jobs are refused; the UUID guard keeps the
+        deletion from ever touching an arbitrary directory stored in the record.
+        """
+        with self.lock:
+            job = next((j for j in self.list_jobs() if j['id'] == job_id), None)
+            if not job:
+                raise ValueError('任务记录不存在。')
+            if job['state'] in ('queued', 'running'):
+                raise ValueError('任务仍在进行中，结束后再删除记录。')
+            with self.connection() as db:
+                db.execute('BEGIN IMMEDIATE')
+                cursor = db.execute('DELETE FROM desktop_jobs WHERE id=? AND state NOT IN (?,?)',
+                                    (job_id, 'queued', 'running'))
+                if cursor.rowcount != 1:
+                    raise ValueError('任务仍在进行中，结束后再删除记录。')
+            output = self.output_path(job)
+            if output.name == job['id'] and output.parent.name == 'jobs':
+                import shutil
+                shutil.rmtree(output, ignore_errors=True)
+            self.audit('job_deleted')
+            return True
+
     def output_path(self, job):
         return Path(job.get('outputDir') or self.root / 'jobs' / job['id'])
 
-    def artifact_path(self, job_id, artifact_index):
+    def artifact_path(self, job_id, artifact_index, kinds=('.pdf',)):
         job = next((j for j in self.list_jobs() if j['id'] == job_id), None)
         if not job or job['state'] != 'completed':
             raise ValueError('翻译任务尚未成功完成。')
@@ -454,8 +582,8 @@ class LocalStore(FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLi
             path = candidate.resolve(strict=True)
         except OSError:
             raise ValueError('任务产物不存在或已被清理。') from None
-        if not path.is_relative_to(root) or path.suffix.lower() != '.pdf' or not path.is_file():
-            raise ValueError('无效 PDF 产物。')
+        if not path.is_relative_to(root) or path.suffix.lower() not in kinds or not path.is_file():
+            raise ValueError('无效译文产物。')
         if path.stat().st_size > MAX_PDF:
             raise ValueError('译文超过 100 MiB。')
         return path

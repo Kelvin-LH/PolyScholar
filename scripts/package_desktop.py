@@ -19,10 +19,6 @@ def main():
     dist = args.dist.absolute()
     runtime = args.runtime.absolute()
     if not (ROOT/'polyscholar/app.py').is_file(): parser.error('GUI source is missing')
-    for engine in ('babeldoc', 'pdfmathtranslate'):
-        relative = 'python.exe' if sys.platform == 'win32' else 'bin/python3'
-        if not (runtime/engine/relative).is_file(): parser.error('Embedded runtime missing; run prepare_runtime.py first')
-    if not (runtime/'runtime-manifest.json').is_file(): parser.error('Verified runtime manifest missing')
     # Stage a plain script entrypoint; no -m assumption and no relative-import ambiguity.
     work = ROOT/'.tools/python-build'
     work.mkdir(parents=True, exist_ok=True)
@@ -39,20 +35,12 @@ def main():
     artifact = dist/'PolyScholar.app' if sys.platform == 'darwin' else dist/'PolyScholar'
     resources = artifact/'Contents/Resources/resources' if sys.platform == 'darwin' else artifact/'_internal/resources'
     resources.mkdir(parents=True, exist_ok=True)
-    target_runtime = resources/'runtime'
-    if target_runtime.exists(): shutil.rmtree(target_runtime)
-    shutil.copytree(runtime, target_runtime, symlinks=True)
-    for directory in ('integrations', 'schemas', 'licenses'):
+    for directory in ('integrations', 'schemas', 'licenses', 'rubrics'):
         target = resources/directory
         if target.exists(): shutil.rmtree(target)
         shutil.copytree(ROOT/directory, target, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    # The isolated summary worker loads this controlled helper beside its script.
-    shutil.copy2(ROOT/'polyscholar/summary_model.py', resources/'integrations/summary_model.py')
-    for filename in ('LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md'):
+    for filename in ('LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'cli.md'):
         shutil.copy2(ROOT/filename, resources/filename)
-    # Execute the packaged engine trees from their actual final bundle prefix.
-    subprocess.run([sys.executable, str(ROOT/'scripts/prepare_runtime.py'), '--verify-only',
-                    '--output', str(target_runtime)], cwd=ROOT, check=True)
     if args.codesign_identity:
         if sys.platform != 'darwin': parser.error('codesign identity is supported only on macOS')
         subprocess.run(['codesign', '--force', '--deep', '--options', 'runtime', '--sign',

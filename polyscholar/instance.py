@@ -4,6 +4,10 @@ import os
 from pathlib import Path
 
 
+class LibraryBusy(ValueError):
+    """另一个进程持有库生命周期锁;CLI 以独立退出码区分这种失败。"""
+
+
 class LibraryLock:
     def __init__(self, root):
         self.fd = None
@@ -23,7 +27,7 @@ class LibraryLock:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             os.close(fd)
-            raise ValueError('此文献库已在运行，请切换到已打开的 PolyScholar。') from None
+            raise LibraryBusy('此文献库已在运行，请切换到已打开的 PolyScholar。') from None
         self.fd = fd
 
     def close(self):

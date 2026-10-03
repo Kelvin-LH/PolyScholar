@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Real generated PDFs: attachment identity through extraction and loopback summary."""
+"""Real generated PDFs: attachment identity survives extraction, reading and restart."""
 from pathlib import Path
 import tempfile
 import unittest
 import pymupdf
 from polyscholar.service import LocalService
-from test_summary_http import provider
 
 
 class AttachmentFlowTests(unittest.TestCase):
@@ -23,7 +22,7 @@ class AttachmentFlowTests(unittest.TestCase):
             page = pdf.new_page();page.insert_text((72, 72), text);pdf.save(path)
         return path
 
-    def test_child_pdf_identity_is_preserved_through_real_parse_and_summary(self):
+    def test_child_pdf_identity_is_preserved_through_real_parse_and_restart(self):
         attachment = self.service.import_attachment(self.parent['id'], self.child_source, 'supplement')
         child_id = attachment.get('documentId', attachment['id'])
         original = self.parent_source.read_bytes();supplement = self.child_source.read_bytes()
@@ -35,17 +34,8 @@ class AttachmentFlowTests(unittest.TestCase):
         self.assertNotIn('20 samples', blocks[0]['text'])
         self.assertEqual(revision['sha256'], self.service.store.document(child_id)['sha256'])
         self.assertIsNone(self.service.current_document_ir(self.parent['id']))
-        with provider() as (address, seen):
-            self.service.save_settings({'endpoint': address, 'model': 'synthetic-model', 'timeoutSeconds': 3})
-            self.service.set_session_key('dummy-attachment-key')
-            saved = self.service.summarize_document(child_id, [blocks[0]['id']], revision['id'])
-        self.assertEqual(len(seen), 1)
-        self.assertEqual(saved[0]['documentId'], child_id)
-        self.assertEqual(saved[0]['evidence'][0]['revisionId'], revision['id'])
-        self.assertEqual(self.service.list_claims(self.parent['id']), [])
         self.assertEqual(self.parent_source.read_bytes(), original)
         self.assertEqual(self.child_source.read_bytes(), supplement)
         self.service.close()
         self.service = LocalService(self.root / 'data');self.addCleanup(self.service.close)
         self.assertEqual(len(self.service.list_attachments(self.parent['id'])), 2)
-        self.assertEqual(self.service.list_claims(child_id)[0]['id'], saved[0]['id'])

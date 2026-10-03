@@ -4,7 +4,7 @@
 
 **你的本地双语文献工作台**
 
-文献管理 · 论文翻译 · 双语阅读 · 笔记与引用
+文献管理 · 论文翻译 · 双语阅读 · AI 评分与提炼 · agent 可编程
 
 [![Checks](https://github.com/Kelvin-LH/PolyScholar/actions/workflows/core.yml/badge.svg)](https://github.com/Kelvin-LH/PolyScholar/actions/workflows/core.yml)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
@@ -19,17 +19,33 @@
 
 ![文献库设计](design/concepts/library.png)
 
+## 这是什么
+
+一个**本地优先**的个人学术文献工具：文献管理对标 Zotero，arXiv 论文一键翻译成双语 HTML，再用可核验的 AI 工作流给论文打分和提炼。所有数据存在本机 SQLite，无账户、无云同步；联网仅发生在你明确触发的动作（arXiv 拉取、模型 API）。[数据边界 →](docs/09-local-and-network-scope.md)
+
 ## 核心功能
 
-- **本地文献库**：集合与子集合、多 PDF 附件、四类文献信息、有序个人/机构作者、标签与笔记、高级检索、保存搜索与 PDF 全文检索，文献管理对标 Zotero。
-- **双引擎翻译**：集成 [BabelDOC](https://github.com/funstory-ai/BabelDOC) 与 [PDFMathTranslate](https://github.com/PDFMathTranslate/PDFMathTranslate)，原文与译文分开保存。
-- **双语阅读**：原文与译文并排显示，在桌面内完成阅读。
-- **证据摘要**：勾选原文生成结构化模型摘要，保留引用与手写笔记，可跳转原文并提示旧引用失效。
-- **自选模型**：支持 DeepSeek 等兼容 API，自动获取可用模型，也可手动填写。
-- **文件导出**：导出译文 PDF，以及 BibTeX、RIS、CSL-JSON 文献元数据。
-- **个人桌面**：Python + PySide6 + SQLite，无需服务器或账户。发行包自带 Python，缓存目录可调整。
+- **本地文献库**：集合与子集合、多 PDF 附件、五类文献信息、有序个人/机构作者、标签、高级检索、保存搜索与 PDF 全文检索。
+- **双语翻译**：arXiv 论文整篇翻译为纯中文双语 HTML，保留图表与公式；译文归属文献，可导出。
+- **AI 评分（论文分 + 置信度）**：依据 [rubrics/](rubrics/) 两份量化打分文档，由三个隔离子代理盲评、取中位数、极差超限强制复核；合卷、校验、归档全部程序化（[评分工作流 →](cli.md#评分paper--confidence)）。文献详情页可查看完整评分明细（维度得分/得失分点/三评委原文），支持按分数排序。
+- **AI 提炼**：两个子代理按固定契约提取**解决的问题 / 使用的方法 / 实验效果 / 不足与缺陷**，程序合并去重后写入文献，四节清单可溯源到代理与出处。
+- **文件导出**：导出译文 HTML，以及 BibTeX、RIS、CSL-JSON 文献元数据。
+- **个人桌面**：Python + PySide6 + SQLite，无需服务器或账户。
 
-文献与笔记保存在本机。联网用于模型 API、DOI 元数据查询及模型/字体下载；翻译时会向模型 API 发送论文内容。[数据边界 →](docs/09-local-and-network-scope.md)
+## 命令行与 MCP（AI agent 入口）
+
+PolyScholar 把整个文献库暴露给 AI agent：GUI、CLI、MCP 三种入口共用同一服务层与校验。
+
+```sh
+polyscholar-cli add --arxiv 2503.19755          # 导入(支持批量)
+polyscholar-cli parse <doc> && polyscholar-cli text <doc> --json   # 解析并取全文
+polyscholar-cli score aggregate --kind paper --reports A.json B.json C.json \
+    --apply <doc> --rationale-file r.md          # 三盲评合卷一次入库
+polyscholar-cli search "蒸馏" --doc <doc>         # 全文定位,免整篇重读
+polyscholar-cli status --json                    # 库状态(锁/计数),不取锁
+```
+
+内置 MCP server（[mcp.md](mcp.md)）以 `cli_docs` + `cli_run` 两个工具把 [cli.md](cli.md) 契约直接交给 Claude/Cursor/ZCode 等 AI 客户端；评分与提炼的"智能"在 agent 侧，程序侧强制执行 rubric 规则（结构校验、中位数、复核门槛、材料包一致性）。
 
 ## 界面预览
 
@@ -43,10 +59,6 @@
 
 <details>
 <summary>更多界面设计</summary>
-
-**证据摘要**
-
-![证据摘要设计](design/concepts/summary.png)
 
 **引用导出**
 
@@ -79,8 +91,6 @@ Python / PySide6 原型，使用合成测试 PDF。
 
 ![本地全文检索](design/screenshots/fulltext-python.png)
 
-![原生证据摘要与笔记](design/screenshots/evidence-python.png)
-
 </details>
 
 ## 快速开始
@@ -94,13 +104,14 @@ python -m pip install -e .
 python -m polyscholar
 ```
 
-翻译引擎准备与自带 Python 打包见 [运行环境指南](integrations/EMBEDDED_RUNTIME.md)。
+1. 导入本地 PDF 或粘贴 arXiv 链接。
+2. 在设置中填写模型 API 地址与密钥。
+3. 创建翻译任务，双语阅读或导出。
+4. （可选）接入 MCP 后，让你的 AI agent 按 rubrics 完成评分与提炼——见 [mcp.md](mcp.md)。
 
-1. 导入本地 PDF。
-2. 在设置中填写 API 地址与密钥，获取并选择模型。
-3. 选择引擎与页范围，创建翻译任务。
-4. 阅读或导出翻译结果。
+## 开发路线
 
+近期的方向（UI 简化、评分的联网核验、置信度的开源真实性核验等）整理在 [docs/16-roadmap.md](docs/16-roadmap.md)。已完成能力的验收记录见 [docs/14-review-remediation.md](docs/14-review-remediation.md)。
 
 ## 参与贡献
 

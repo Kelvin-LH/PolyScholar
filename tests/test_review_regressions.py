@@ -13,10 +13,9 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
-from integrations import engines
+from integrations import limited_environment
 from polyscholar.service import LocalService, environment
 from polyscholar.store import LocalStore
-from scripts.prepare_runtime import unpack
 
 
 class ReviewTests(unittest.TestCase):
@@ -71,27 +70,10 @@ class ReviewTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.store.prepare_cache(str(link))
         with self.assertRaises(ValueError):self.store.prepare_cache(str(self.store.objects))
 
-    def test_config_private_at_creation_and_existing_file_not_overwritten(self):
-        req = engines.Request('babeldoc',Path(sys.executable),self.source,self.root/'out','https://provider.test','model')
-        original = os.open
-        calls = []
-        def track(path, flags, mode=0o777, **kw):
-            calls.append((flags,mode));return original(path, flags, mode, **kw)
-        with patch('integrations.engines.os.open', side_effect=track):
-            config = engines.private_config(req,self.root/'config','secret')
-        self.assertEqual(calls[0][1],0o600)
-        self.assertTrue(calls[0][0] & os.O_EXCL)
-        before = config.read_bytes()
-        with self.assertRaises(FileExistsError):engines.private_config(req,self.root/'config','other')
-        self.assertEqual(config.read_bytes(),before)
-
     def test_bad_ports_os_environment_and_metadata_limits(self):
-        req = engines.Request('babeldoc',Path(sys.executable),self.source,self.root/'out','https://provider.test','model',allow_document_upload=True,allow_asset_download=True)
-        for endpoint in ('https://provider.test:99999','https://provider.test:abc'):
-            with self.assertRaises(ValueError):engines.validate(replace(req,endpoint=endpoint))
         variables = {k:'os-value' for k in ('APPDATA','LOCALAPPDATA','SYSTEMDRIVE','COMSPEC','PATHEXT')}
         with patch.dict(os.environ,{**variables,'OPENAI_API_KEY':'private','CUSTOM_SECRET':'private'}):
-            self.assertEqual(environment(),engines.limited_environment())
+            self.assertEqual(environment(),limited_environment())
             self.assertTrue(all(environment()[key]==value for key,value in variables.items()))
             self.assertNotIn('CUSTOM_SECRET',environment())
         self.store.update_document(self.doc['id'],{'notes':'n'*65536})
@@ -147,7 +129,7 @@ class ReviewTests(unittest.TestCase):
         try:
             self.assertTrue((reopened.root/'library-before-v3.sqlite3').exists())
             with reopened.connection() as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],8)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],12)
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM desktop_audit WHERE point='legacy_event'").fetchone()[0],1)
                 with self.assertRaises(sqlite3.IntegrityError):
                     db.execute("UPDATE desktop_audit SET outcome='typo' WHERE point='document_imported'")
@@ -164,34 +146,4 @@ class ReviewTests(unittest.TestCase):
         self.service._notify_job({'id':'j','state':'completed'})
         self.assertEqual(len(received),1)
 
-    def test_worker_events_persist_metrics_and_finish_before_lock_release(self):
-        worker=self.service.resources/'integrations/job_worker.py';worker.parent.mkdir(parents=True)
-        worker.write_text("import sys,json,pathlib\nr=json.loads(sys.stdin.readline())\nassert r['timeout']==3600\np=pathlib.Path(r['output']);p.mkdir()\n(p/'output.pdf').write_bytes(b'%PDF-1.7 synthetic')\nfor event in ['progress','completed']:\n print(json.dumps(dict(protocol_version=1,job_id=r['job_id'],event=event,progress=50,usage={'total_tokens':42,'secret':r['api_key']})),flush=True)\n")
-        self.store.save_settings({'timeoutSeconds':3600,'model':'synthetic'})
-        self.service.set_session_key('secret-marker')
-        received=[];self.service.subscribe_jobs(received.append)
-        with patch.object(self.service,'discover_engine',return_value={'available':True,'pythonPath':sys.executable}):
-            self.service.start_translation(self.doc['id'])
-        deadline=time.monotonic()+5
-        while time.monotonic()<deadline and not any(e['state']=='completed' for e in received):
-            time.sleep(0.01)
-        stored=self.service.list_jobs()[0]
-        self.assertEqual(stored['state'],'completed')
-        self.assertEqual(stored['usage'],{'total_tokens':42})
-        self.assertEqual(stored['progress'],50)
-        self.assertTrue(any(e['state']=='completed' for e in received))
-        self.assertNotIn('secret-marker',json.dumps(stored))
 
-    def test_tar_filter_preserves_safe_links_rejects_escape(self):
-        archive=self.root/'runtime.tar.gz'
-        with tarfile.open(archive,'w:gz') as tar:
-            file=tarfile.TarInfo('python/bin/python3');file.size=1;tar.addfile(file,io.BytesIO(b'x'))
-            link=tarfile.TarInfo('python/bin/python');link.type=tarfile.SYMTYPE;link.linkname='python3';tar.addfile(link)
-        output=self.root/'unpacked';unpack(archive,output)
-        self.assertEqual((output/'python/bin/python').read_bytes(),b'x')
-        with tarfile.open(archive,'w:gz') as tar:
-            bad=tarfile.TarInfo('python/escape');bad.type=tarfile.SYMTYPE;bad.linkname='../../outside';tar.addfile(bad)
-        with self.assertRaises(ValueError):unpack(archive,self.root/'bad')
-
-
-if __name__ == '__main__':unittest.main()

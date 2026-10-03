@@ -31,9 +31,13 @@ class AttachmentLibrary:
 
     def list_root_documents(self):
         with self.connection() as db:
-            return [json.loads(row[0]) for row in db.execute('''SELECT d.data FROM desktop_documents d
+            documents = [json.loads(row[0]) for row in db.execute('''SELECT d.data FROM desktop_documents d
                 WHERE NOT EXISTS(SELECT 1 FROM desktop_attachment_links a WHERE a.child_document_id=d.id)
                 ORDER BY d.rowid DESC''')]
+            scores = self._score_map(db)
+        for document in documents:
+            document['scores'] = scores.get(document['id'], {})
+        return documents
 
     def list_attachments(self, parent_id):
         with self.connection() as db:

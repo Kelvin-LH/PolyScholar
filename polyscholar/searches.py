@@ -72,6 +72,10 @@ class SearchLibrary:
     def search_documents(self, text='', collection_id=None, unfiled=False, tags=None, include_descendants=False, query=None):
         rules = validate_query(query) if query is not None else None
         documents = super().search_documents(text=text, collection_id=collection_id, unfiled=unfiled, tags=tags, include_descendants=include_descendants)
+        with self.connection() as db:
+            scores = self._score_map(db)
+        for document in documents:
+            document['scores'] = scores.get(document['id'], {})
         return [document for document in documents if matches_query(document, rules)] if rules else documents
 
     def list_saved_searches(self):
