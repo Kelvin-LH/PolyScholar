@@ -2,100 +2,75 @@
 
 # PolyScholar · 研译
 
-**你的本地双语文献工作台**
+**本地论文库 × 可核验的 AI 评分工作台**
 
-文献管理 · 论文翻译 · 双语阅读 · AI 评分与提炼 · agent 可编程
+让 AI agent 按量化量表读论文、盲评打分、结构化提炼——每个分数都能翻回原文核对。
 
 [![Checks](https://github.com/Kelvin-LH/PolyScholar/actions/workflows/core.yml/badge.svg)](https://github.com/Kelvin-LH/PolyScholar/actions/workflows/core.yml)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/Kelvin-LH/PolyScholar?style=flat)](https://github.com/Kelvin-LH/PolyScholar/stargazers)
 
-[界面预览](#界面预览) · [快速开始](#快速开始) · [开发路线](#开发路线) · [文档](#文档) · [参与贡献](#参与贡献)
+[AI 评分工作流](#ai-评分工作流核心) · [三种用法](#三种用法同一套能力) · [快速开始](#快速开始) · [开发路线](#开发路线)
 
 </div>
 
 > 开发中，尚未发布安装包。
 
-![文献库设计](design/concepts/library.png)
+## 为什么是这个样子
 
-## 这是什么
+读论文最贵的不是下载，是**判断**：这篇论文的创新是否成立？结论可信到什么程度？PolyScholar 把"判断"做成可核验的工作流，而不是一句模型印象：
 
-一个**本地优先**的个人学术文献工具：文献管理对标 Zotero，arXiv 论文一键翻译成双语 HTML，再用可核验的 AI 工作流给论文打分和提炼。所有数据存在本机 SQLite，无账户、无云同步；联网仅发生在你明确触发的动作（arXiv 拉取、模型 API）。[数据边界 →](docs/09-local-and-network-scope.md)
+- **评分不是打印象分**——两份量化量表（[论文质量](rubrics/paper-scoring.md) 20 个条目、[置信度](rubrics/confidence-scoring.md) 四维红旗），每个条目按连续条件计分，必须引用原文位置；
+- **不是单模型说了算**——三个互相不可见的子代理盲评，取中位数；极差超过 10/15 分强制复核，复核后仍有分歧如实标注；
+- **程序强制规则，agent 只做判断**——结构校验、中位数、材料包一致性、复核门槛全部由程序执行；agent 试图提交不合规范的评分会被直接拒绝；
+- **结论可溯源**——文献详情页能查到每个维度"得在哪里、卡在哪一条、依据原文哪一句"，三位评委的逐字原文永久留档。
 
-## 核心功能
-
-- **本地文献库**：集合与子集合、多 PDF 附件、五类文献信息、有序个人/机构作者、标签、高级检索、保存搜索与 PDF 全文检索。
-- **双语翻译**：arXiv 论文整篇翻译为纯中文双语 HTML，保留图表与公式；译文归属文献，可导出。
-- **AI 评分（论文分 + 置信度）**：依据 [rubrics/](rubrics/) 两份量化打分文档，由三个隔离子代理盲评、取中位数、极差超限强制复核；合卷、校验、归档全部程序化（[评分工作流 →](cli.md#评分paper--confidence)）。文献详情页可查看完整评分明细（维度得分/得失分点/三评委原文），支持按分数排序。
-- **AI 提炼**：两个子代理按固定契约提取**解决的问题 / 使用的方法 / 实验效果 / 不足与缺陷**，程序合并去重后写入文献，四节清单可溯源到代理与出处。
-- **文件导出**：导出译文 HTML，以及 BibTeX、RIS、CSL-JSON 文献元数据。
-- **个人桌面**：Python + PySide6 + SQLite，无需服务器或账户。
-
-## 命令行与 MCP（AI agent 入口）
-
-PolyScholar 把整个文献库暴露给 AI agent：GUI、CLI、MCP 三种入口共用同一服务层与校验。
+## AI 评分工作流（核心）
 
 ```sh
-polyscholar-cli add --arxiv 2503.19755          # 导入(支持批量)
-polyscholar-cli parse <doc> && polyscholar-cli text <doc> --json   # 解析并取全文
-polyscholar-cli score aggregate --kind paper --reports A.json B.json C.json \
-    --apply <doc> --rationale-file r.md          # 三盲评合卷一次入库
-polyscholar-cli search "蒸馏" --doc <doc>         # 全文定位,免整篇重读
-polyscholar-cli status --json                    # 库状态(锁/计数),不取锁
+polyscholar-cli rubric show paper            # agent 先取打分文档(含版本与 SHA-256)
+polyscholar-cli parse <doc>                  # 解析全文
+polyscholar-cli text <doc> --pages 2-5       # 按页阅读,search 可全文定位
+# 你的 AI agent 开三个隔离子代理,各写一份评分报告 JSON
+polyscholar-cli score aggregate --kind paper \
+    --reports A.json B.json C.json --apply <doc> --rationale-file r.md
 ```
 
-内置 MCP server（[mcp.md](mcp.md)）以 `cli_docs` + `cli_run` 两个工具把 [cli.md](cli.md) 契约直接交给 Claude/Cursor/ZCode 等 AI 客户端；评分与提炼的"智能"在 agent 侧，程序侧强制执行 rubric 规则（结构校验、中位数、复核门槛、材料包一致性）。
+极差超限时 aggregate 不合卷，返回**分歧条目清单 + 复核指令模板**，复核后加 `--recheck` 重跑。提炼同理，只需两个子代理：
 
-## 界面预览
+```sh
+polyscholar-cli score aggregate --kind summary \
+    --reports A.json B.json --apply <doc>    # 四节:问题/方法/实验效果/不足
+```
 
-### 双语阅读 · 设计效果图
+桌面上每篇文献显示**论文分 / 置信度 / AI 提炼**三块独立窗口；"查看完整评分明细"按选项卡展开全部维度得分、得失分点、红旗清单和评委原文，可导出 JSON。
 
-![双语阅读设计](design/concepts/reader.png)
+## 三种用法（同一套能力）
 
-### 翻译任务 · 设计效果图
+| 入口 | 给谁用 | 说明 |
+|---|---|---|
+| **桌面端** | 人 | PySide6 原生界面：文献库、双语阅读、评分与提炼展示 |
+| **命令行** | 脚本 | `polyscholar-cli`，全部命令支持 `--json`，契约见 [cli.md](cli.md) |
+| **MCP** | AI agent | 两个工具（`cli_docs`/`cli_run`）接入 ZCode/Claude/Cursor，见 [mcp.md](mcp.md) |
 
-![翻译任务设计](design/concepts/tasks.png)
+三种入口调用同一个服务层——同样的校验、同样的审计、同一份数据。
 
-<details>
-<summary>更多界面设计</summary>
+## 文献库与阅读
 
-**引用导出**
+- **本地文献库**：集合与子集合、多 PDF 附件、五类文献类型、有序作者、标签、高级检索、保存搜索，对标 Zotero 的个人工作流；
+- **双语翻译**：arXiv 论文一键生成双语 HTML，保留图表与公式，译文归属文献、可导出；
+- **全文检索**：解析后支持库级/单篇中文全文定位（`search` 命令），复核评分时免整篇重读；
+- **元数据导出**：BibTeX / RIS / CSL-JSON。
 
-![引用导出设计](design/concepts/citations.png)
+## 设计原则
 
-**模型与本地设置**
-
-![设置设计](design/concepts/settings.png)
-
-</details>
-
-<details>
-<summary>查看当前原生界面截图</summary>
-
-Python / PySide6 原型，使用合成测试 PDF。
-
-![原生文献库](design/screenshots/library-python.png)
-
-![原生设置](design/screenshots/settings-python.png)
-
-![原生文献附件](design/screenshots/attachments-python.png)
-
-![原生书目信息](design/screenshots/metadata-python.png)
-
-![作者与编者](design/screenshots/creators-python.png)
-
-![高级检索与保存搜索](design/screenshots/searches-python.png)
-
-![元数据检索条件](design/screenshots/search-rules-python.png)
-
-![本地全文检索](design/screenshots/fulltext-python.png)
-
-</details>
+- **本地优先**：SQLite 存本机，无账户无云同步；联网只发生在你触发的动作（[边界说明](docs/09-local-and-network-scope.md)）；
+- **程序化优先**：能由程序确定完成的（校验、合卷、合并、归档）绝不让模型重做——省 token，也省出错面；
+- **诚实呈现**：没有的能力不假装——空态说明如何产生数据，核验不了如实标注"无法核验"。
 
 ## 快速开始
 
-当前可从源码运行，需 Python 3.12+。
+需 Python 3.12+。
 
 ```sh
 git clone https://github.com/Kelvin-LH/PolyScholar.git
@@ -104,14 +79,13 @@ python -m pip install -e .
 python -m polyscholar
 ```
 
-1. 导入本地 PDF 或粘贴 arXiv 链接。
-2. 在设置中填写模型 API 地址与密钥。
-3. 创建翻译任务，双语阅读或导出。
-4. （可选）接入 MCP 后，让你的 AI agent 按 rubrics 完成评分与提炼——见 [mcp.md](mcp.md)。
+1. 导入本地 PDF 或粘贴 arXiv 链接；
+2. （可选翻译）设置模型 API，创建翻译任务；
+3. （可选评分）接入 MCP 后让 agent 按 rubrics 完成评分与提炼——见 [mcp.md](mcp.md)。
 
 ## 开发路线
 
-近期的方向（UI 简化、评分的联网核验、置信度的开源真实性核验等）整理在 [docs/16-roadmap.md](docs/16-roadmap.md)。已完成能力的验收记录见 [docs/14-review-remediation.md](docs/14-review-remediation.md)。
+UI 简化重构、评分的联网核验（研究进度/SOTA 感知）、置信度的开源真实性核验（空壳仓库/部分开源/代码质量）等方向整理在 [docs/16-roadmap.md](docs/16-roadmap.md)。
 
 ## 参与贡献
 
@@ -129,7 +103,3 @@ python -m unittest discover -s tests -v
 [AGPL-3.0-only](LICENSE) · 允许商业使用，遵守适用的源码公开与通知义务。
 
 [第三方许可](THIRD_PARTY_NOTICES.md) · [来源追踪](docs/05-licensing-and-traceability.md)
-
-## Star History
-
-[![Star History](https://api.star-history.com/svg?repos=Kelvin-LH/PolyScholar&type=Date)](https://www.star-history.com/#Kelvin-LH/PolyScholar&Date)
