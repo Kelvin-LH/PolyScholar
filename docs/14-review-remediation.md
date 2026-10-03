@@ -18,6 +18,10 @@
 
 版本导入另观察到 onnxruntime 原生组件尝试持久化设备标识并被本机沙箱拒绝；Python 路径替换/网络审计不是 OS 沙箱，也不能证明原生组件无联网或其他副作用，该项留在 V3 联调门槛。真实翻译/API、旧凭据残留恢复、Windows ACL、真实强杀和三平台干净系统安装继续开放。
 
+源码 `ab2e62c` 的 [CI 37083901690](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37083901690) 已确认六项成功，Windows 实际247项/154.985秒、8项平台跳过。其[首轮冻结验证 37083918892](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37083918892/attempts/1) 中 Linux x86_64 构建、包内配置和中文路径迁移成功，最终 JSON 的 sourceCommit 及新增字段已核对；macOS 在官方 Python 资产下载 HTTP502 失败，尚未运行包检查；Windows 在真实 BabelDOC 版本 CLI 的 asyncio 唤醒管道初始化失败。后者因检查夹具阻断 `socket._fallback_socketpair` 内部 bind，不能归为应用翻译失败，也不能用此前源码测试成功掩盖。macOS 对同一提交仅重试下载失败的 job，[第二次尝试](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37083918892/attempts/2) 的实际构建与迁移成功，协调者核对新增字段和相同源码 SHA；Windows 失败仍保留，整轮仍为 failure。
+
+随后先用标准库 fallback socketpair 与真实 asyncio.run 在本机重现 Windows 夹具失败，修正为加载任何上游前预建一次真实事件循环；网络审计安装后，真实 Runner 仅能领取一次。成功、参数提前退出和异常均回收套接字，后续 DNS/connect/bind 继续拒绝，没有开放任意 loopback。协调者6项专项实测通过（0.197秒），新 macOS 包内两引擎原 CLI 版本和 pip check 再次通过；Windows 修复结果等待新提交冻结 CI，不复用旧包结论。
+
 ## 凭据配置改为内存交付（2026-10-03）
 
 复核基线 `14490c1`，远端源码 CI `82cc4bf` 六项成功，工作树初始干净。先对两个适配器分别执行真实 `os._exit(71)`：仅绕过版本探测，在启动引擎边界硬退出；各留下一个含合成令牌的 TOML/JSON 文件，临时夹具随后由测试清理。未调用真实引擎或 API，不将该复现称 Windows 验收。

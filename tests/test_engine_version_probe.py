@@ -3,6 +3,7 @@
 
 使用临时 CLI 夹具检查语义与清理，不代表真实引擎或安装包验收。
 """
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -24,7 +25,7 @@ class VersionProbeTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
 
-    def run_cli(self, engine, code):
+    def run_cli(self, engine, code, *, fallback_socketpair=False):
         package, module = (
             ('babeldoc', 'main') if engine == 'babeldoc' else ('pdf2zh', 'pdf2zh')
         )
@@ -33,42 +34,58 @@ class VersionProbeTests(unittest.TestCase):
         (modules / package / '__init__.py').write_text('', encoding='utf-8')
         (modules / package / (module + '.py')).write_text(code, encoding='utf-8')
         home = self.root / engine / 'disposable-home'
-        original_home = self.root / engine / 'original-home'
-        original_home.mkdir()
-        sentinel = original_home / 'sentinel'
-        sentinel.write_text('original configuration', encoding='utf-8')
         environment = {
             name: os.environ[name]
-            for name in ('SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP')
+            for name in ('HOME', 'USERPROFILE', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP')
             if name in os.environ
         }
         environment.update({
             'PATH': os.defpath,
-            'HOME': str(original_home),
-            'USERPROFILE': str(original_home),
-            'SYNTHETIC_ORIGINAL_HOME': str(original_home),
+            'SYNTHETIC_HOME_STATE': json.dumps({
+                name: os.environ.get(name) for name in ('HOME', 'USERPROFILE')
+            }),
             'SYNTHETIC_DISPOSABLE_HOME': str(home),
         })
         # Only this test bootstrap adds the synthetic package; production runs
         # the bundled interpreter's installed upstream module unchanged.
         # 仅测试引导加入合成模块路径，生产检查执行自带解释器的原上游模块。
-        bootstrap = (
-            'import runpy,sys\n'
+        bootstrap = 'import runpy,socket,sys\n'
+        if fallback_socketpair:
+            # Exercise the stdlib Windows wakeup implementation on every host.
+            # 所有主机都强制使用 Windows 的标准库本地 TCP 唤醒实现。
+            bootstrap += (
+                'pairs=[]\n'
+                'def fallback(*args,**kwargs):\n'
+                '    pair=socket._fallback_socketpair(*args,**kwargs)\n'
+                '    pairs.append(pair)\n'
+                '    return pair\n'
+                'socket.socketpair=fallback\n'
+            )
+        bootstrap += (
             'sys.path.insert(0,sys.argv[1])\n'
             'sys.argv=sys.argv[2:]\n'
-            'runpy.run_path(sys.argv[0],run_name="__main__")\n'
         )
+        if fallback_socketpair:
+            bootstrap += (
+                'try:\n'
+                '    runpy.run_path(sys.argv[0],run_name="__main__")\n'
+                'finally:\n'
+                '    assert len(pairs)==1, "Expected one native wakeup pair"\n'
+                '    assert all(sock.fileno()==-1 for pair in pairs for sock in pair), '
+                '"Native wakeup pair was not closed"\n'
+            )
+        else:
+            bootstrap += 'runpy.run_path(sys.argv[0],run_name="__main__")\n'
         result = subprocess.run(
             [sys.executable, '-I', '-c', bootstrap, str(modules),
              str(HELPER), engine, str(home)],
             cwd=self.root, env=environment, capture_output=True, timeout=15,
         )
-        self.assertEqual(sentinel.read_text(encoding='utf-8'), 'original configuration')
-        self.assertEqual(list(original_home.iterdir()), [sentinel])
         return result, home
 
     def test_actual_module_cli_stdout_and_home_discovery_are_preserved(self):
         code = '''
+import json
 import os
 from pathlib import Path
 import sys
@@ -80,8 +97,8 @@ assert os.path.expanduser('~') == str(home)
 assert os.path.expanduser('~/cache') == str(home) + '/cache'
 assert os.path.expanduser(b'~/cache') == os.fsencode(str(home) + '/cache')
 assert os.path.expanduser('relative/path') == 'relative/path'
-assert os.environ['HOME'] == os.environ['SYNTHETIC_ORIGINAL_HOME']
-assert os.environ['USERPROFILE'] == os.environ['SYNTHETIC_ORIGINAL_HOME']
+for name, original in json.loads(os.environ['SYNTHETIC_HOME_STATE']).items():
+    assert os.environ.get(name) == original
 try:
     os.path.expanduser('~foreign/cache')
 except RuntimeError:
@@ -101,10 +118,55 @@ raise SystemExit(0)
                 self.assertEqual((home / 'synthetic-cache').read_text(), 'version import cache')
 
     def test_nonzero_cli_status_is_not_changed_to_success(self):
-        result, _ = self.run_cli('babeldoc',
-                                 'print("synthetic version failure")\nraise SystemExit(7)\n')
+        # An early parser exit never claims the prebuilt loop; it must still close.
+        # 参数解析提前退出不会领取预建循环，仍必须关闭底层唤醒管道。
+        result, _ = self.run_cli(
+            'babeldoc', 'print("synthetic version failure")\nraise SystemExit(7)\n',
+            fallback_socketpair=True,
+        )
         self.assertEqual(result.returncode, 7)
         self.assertEqual(result.stdout.splitlines(), [b'synthetic version failure'])
+        self.assertEqual(result.stderr, b'')
+
+    def test_real_asyncio_run_uses_one_native_wakeup_pair_and_keeps_network_denied(self):
+        result, _ = self.run_cli('babeldoc', '''
+import asyncio
+import socket
+
+async def main():
+    await asyncio.sleep(0)
+    try:
+        asyncio.events.new_event_loop()
+    except RuntimeError as error:
+        assert str(error) == 'The version event loop can only be used once'
+    else:
+        raise AssertionError('A second event loop was accepted')
+    try:
+        socket.getaddrinfo('synthetic.invalid', 443)
+    except RuntimeError as error:
+        assert str(error) == 'Network is disabled in the version fixture'
+    else:
+        raise AssertionError('Unexpected DNS lookup')
+    with socket.socket() as outgoing:
+        try:
+            outgoing.connect(('127.0.0.1', 9))
+        except RuntimeError as error:
+            assert str(error) == 'Network is disabled in the version fixture'
+        else:
+            raise AssertionError('Unexpected local connection')
+    with socket.socket() as incoming:
+        try:
+            incoming.bind(('127.0.0.1', 0))
+        except OSError as error:
+            assert str(error) == 'Passive bind is disabled in the version fixture'
+        else:
+            raise AssertionError('Unexpected local listener')
+    print('synthetic async version')
+
+asyncio.run(main())
+''', fallback_socketpair=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [b'synthetic async version'])
         self.assertEqual(result.stderr, b'')
 
     def test_network_name_lookup_is_rejected_before_io(self):
@@ -127,13 +189,15 @@ else:
         runtime = self.root / 'runtime'
         seen = []
         environment = {
-            'HOME': 'synthetic-original-home',
-            'USERPROFILE': 'synthetic-original-profile',
+            name: os.environ[name] for name in ('HOME', 'USERPROFILE')
+            if name in os.environ
+        }
+        environment.update({
             'PATH': 'synthetic-original-path',
             'OPENAI_API_KEY': 'synthetic-secret',
             'PYTHONPATH': 'synthetic-foreign-imports',
             'XDG_CACHE_HOME': 'synthetic-foreign-cache',
-        }
+        })
 
         def execute(command, **kwargs):
             seen.append((command, kwargs))
@@ -143,9 +207,10 @@ else:
                 self.assertTrue(folder.is_dir())
                 self.assertEqual(Path(command[-1]), folder / 'home')
                 self.assertEqual(command[1:4], ['-I', str(HELPER), 'babeldoc'])
-                self.assertEqual(set(kwargs['env']), {'HOME', 'USERPROFILE', 'PATH'})
-                self.assertEqual(kwargs['env']['HOME'], environment['HOME'])
-                self.assertEqual(kwargs['env']['USERPROFILE'], environment['USERPROFILE'])
+                expected_keys = {'PATH'} | ({'HOME', 'USERPROFILE'} & environment.keys())
+                self.assertEqual(set(kwargs['env']), expected_keys)
+                for name in ('HOME', 'USERPROFILE'):
+                    self.assertEqual(kwargs['env'].get(name), os.environ.get(name))
                 (folder / 'synthetic-cache').write_text('temporary cache')
             return subprocess.CompletedProcess(command, 0)
 
