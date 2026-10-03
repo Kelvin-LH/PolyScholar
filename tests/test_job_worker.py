@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -32,12 +33,14 @@ class WorkerContractTests(unittest.TestCase):
     def parse(self, body):
         return job_worker.parse_request(json.dumps(body).encode())
 
-    def test_defaults_and_secret_only_in_config(self):
+    def test_defaults_and_secret_only_in_pipe_payload(self):
         identity, req, key = self.parse(self.body)
         self.assertEqual((identity, req.timeout, req.pages), ('job-1', 600, ''))
-        config = engines.private_config(req, self.base / 'private', key)
-        self.assertNotIn(key, ' '.join(engines.command(req, config)))
-        self.assertIn(key, config.read_text())
+        self.assertNotIn(key, ' '.join(engines.command(req)))
+        _, upstream_req, upstream_key = job_worker.parse_request(engines.request_input(req, key))
+        self.assertEqual(upstream_req, req)
+        self.assertEqual(upstream_key, key)
+        self.assertEqual(list(self.base.iterdir()), [self.source])
 
     def test_protocol_type_consent_and_boundaries(self):
         for changes in [dict(protocol_version=True), dict(timeout=True), dict(pages=2),
@@ -63,18 +66,23 @@ class WorkerContractTests(unittest.TestCase):
 
     def test_success_ndjson_unknown_cost_and_cleanup(self):
         fake = self.base/'fake_engine.py'
-        fake.write_text("import pathlib,sys\nout=pathlib.Path(sys.argv[1]);"
+        fake.write_text("import json,pathlib,sys\nbody=json.load(sys.stdin)\n"
+                        "assert not list(pathlib.Path.cwd().iterdir())\n"
+                        "out=pathlib.Path(body['output']);"
                         "(out/'translated.pdf').write_bytes(b'%PDF-1.4\\nsynthetic\\n')\n")
-        configs = []
-        original = engines.private_config
-        def record(req, directory, key):
-            path = original(req, directory, key); configs.append(path); return path
+        working_dirs = []
+        original = engines.start_process
+
+        def launch(*args, **kwargs):
+            working_dirs.append(Path(kwargs['cwd']))
+            return original(*args, **kwargs)
+
         capture = io.StringIO()
         stream = io.TextIOWrapper(io.BytesIO(json.dumps(self.body).encode()))
         with patch.object(sys, 'stdin', stream), patch.object(sys, 'stdout', capture), \
              patch.object(engines, 'check_version'), \
-             patch.object(engines, 'private_config', side_effect=record), \
-             patch.object(engines, 'command', side_effect=lambda req, config: [sys.executable, str(fake), str(req.output)]), \
+             patch.object(engines, 'start_process', side_effect=launch), \
+             patch.object(engines, 'command', return_value=[sys.executable, str(fake)]), \
              patch.object(signal, 'signal'):
             self.assertEqual(job_worker.main(), 0)
         events = [json.loads(line) for line in capture.getvalue().splitlines()]
@@ -82,7 +90,11 @@ class WorkerContractTests(unittest.TestCase):
         self.assertIsNone(events[-1]['cost'])
         self.assertFalse(events[-1]['manifest']['quality_verified'])
         self.assertNotIn(self.body['api_key'], capture.getvalue())
-        self.assertTrue(all(not path.exists() for path in configs))
+        self.assertEqual(len(working_dirs), 1)
+        self.assertFalse(working_dirs[0].exists())
+        output = Path(self.body['output'])
+        self.assertTrue(all(self.body['api_key'].encode() not in path.read_bytes()
+                            for path in output.rglob('*') if path.is_file()))
 
     def test_failure_and_timeout_remove_partial_output(self):
         for mode in ('failure', 'timeout', 'cancelled'):
@@ -90,11 +102,25 @@ class WorkerContractTests(unittest.TestCase):
                 output = self.base / mode
                 _, req, key = self.parse({**self.body, 'output':str(output), 'timeout':1})
                 script = self.base / (mode + '.py')
-                script.write_text('import pathlib,sys,time\n'
-                                  "(pathlib.Path(sys.argv[1])/'partial.pdf').write_bytes(b'partial')\n"
+                script.write_text('import json,pathlib,sys,time\n'
+                                  "body=json.load(sys.stdin)\n"
+                                  "assert not list(pathlib.Path.cwd().iterdir())\n"
+                                  "(pathlib.Path(body['output'])/'partial.pdf').write_bytes(b'partial')\n"
                                   + ('sys.exit(2)' if mode == 'failure' else 'time.sleep(30)'))
-                with patch.object(engines, 'check_version'), patch.object(engines, 'command',
-                        return_value=[sys.executable, str(script), str(output)]):
+                directories = []
+                processes = []
+                original_start = engines.start_process
+
+                def launch(*args, **kwargs):
+                    self.assertEqual(list(Path(kwargs['cwd']).iterdir()), [])
+                    directories.append(Path(kwargs['cwd']))
+                    process = original_start(*args, **kwargs)
+                    processes.append(process)
+                    return process
+
+                with patch.object(engines, 'check_version'), \
+                     patch.object(engines, 'start_process', side_effect=launch), \
+                     patch.object(engines, 'command', return_value=[sys.executable, str(script)]):
                     if mode == 'cancelled':
                         # The real subprocess is killed by the same KeyboardInterrupt branch used by SIGTERM.
                         original_wait = subprocess.Popen.wait
@@ -109,20 +135,79 @@ class WorkerContractTests(unittest.TestCase):
                             engines.run(req, key)
                 self.assertEqual(caught.exception.code, {'failure':'engine_failed', 'timeout':'timeout', 'cancelled':'cancelled'}[mode])
                 self.assertFalse(output.exists())
+                self.assertEqual(len(directories), 1)
+                self.assertFalse(directories[0].exists())
+                self.assertIsNotNone(processes[0].poll())
+
+    def test_large_request_to_nonreading_child_keeps_timeout_and_reaps_writer(self):
+        # 长请求超出常见管道容量，仍须能超时；外部看守避免回归挂死测试。
+        # Exceed common pipe capacities; a watchdog prevents a regression hanging tests.
+        key = '\U0001f512' * 16384
+        _, req, _ = self.parse({**self.body, 'api_key': key, 'model': '中' * 16384,
+                               'timeout': 1})
+        self.assertGreater(len(engines.request_input(req, key)), 256 * 1024)
+        child = self.base / 'nonreading.py'
+        child.write_text('import time\ntime.sleep(30)\n')
+        directories = []
+        processes = []
+        failures = []
+        original_start = engines.start_process
+
+        def launch(*args, **kwargs):
+            self.assertEqual(list(Path(kwargs['cwd']).iterdir()), [])
+            directories.append(Path(kwargs['cwd']))
+            process = original_start(*args, **kwargs)
+            processes.append(process)
+            return process
+
+        def execute():
+            try:
+                engines.run(req, key)
+            except BaseException as error:
+                failures.append(error)
+
+        supervisor = threading.Thread(target=execute, daemon=True)
+        with patch.object(engines, 'check_version'), \
+             patch.object(engines, 'start_process', side_effect=launch), \
+             patch.object(engines, 'command', return_value=[sys.executable, str(child)]):
+            supervisor.start()
+            supervisor.join(timeout=10)
+            expired = supervisor.is_alive()
+            if expired:
+                # 测试失败也回收自己的子进程，不留下挂起读者。
+                # Reap our child even on regression, releasing any blocked write.
+                for process in processes:
+                    engines.stop_process(process)
+                supervisor.join(timeout=5)
+        self.assertFalse(expired, 'Request delivery blocked the engine timeout')
+        self.assertFalse(supervisor.is_alive())
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], engines.EngineError)
+        self.assertEqual(failures[0].code, 'timeout')
+        self.assertEqual(len(directories), 1)
+        self.assertFalse(directories[0].exists())
+        self.assertFalse(req.output.exists())
+        self.assertIsNotNone(processes[0].poll())
+        self.assertFalse(any(thread.name == 'polyscholar-engine-input'
+                             for thread in threading.enumerate()))
 
     @unittest.skipUnless(os.name == 'posix', 'POSIX cooperative cancellation contract')
-    def test_sigterm_cli_kills_engine_and_removes_temporary_credentials(self):
+    def test_sigterm_cli_kills_engine_and_removes_credential_free_cwd(self):
         child = self.base / 'sleep_engine.py'
         marker = self.base / 'child.json'
         child.write_text('import json,os,pathlib,sys,time\n'
-                         'pathlib.Path(sys.argv[2]).write_text(json.dumps([os.getpid(),sys.argv[1]]))\n'
+                         'body=json.load(sys.stdin)\n'
+                         "assert body['api_key'] not in ' '.join(sys.argv)\n"
+                         "assert all(body['api_key'] not in v for v in os.environ.values())\n"
+                         'assert not list(pathlib.Path.cwd().iterdir())\n'
+                         'pathlib.Path(sys.argv[1]).write_text(json.dumps([os.getpid(),str(pathlib.Path.cwd())]))\n'
                          'time.sleep(30)\n')
         wrapper = self.base / 'synthetic_worker.py'
         wrapper.write_text('import sys\n'
                            'sys.path.insert(0,' + repr(str(ROOT)) + ')\n'
                            'from integrations import engines,job_worker\n'
                            'engines.check_version=lambda *args: None\n'
-                           'engines.command=lambda req,config: [sys.executable,' + repr(str(child)) + ',str(config),' + repr(str(marker)) + ']\n'
+                           'engines.command=lambda req: [sys.executable,' + repr(str(child)) + ',' + repr(str(marker)) + ']\n'
                            'raise SystemExit(job_worker.main())\n')
         proc = subprocess.Popen([sys.executable, str(wrapper)], stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -130,15 +215,16 @@ class WorkerContractTests(unittest.TestCase):
         proc.stdin.write(json.dumps(self.body) + '\n'); proc.stdin.close(); proc.stdin = None
         self.assertEqual(json.loads(proc.stdout.readline())['event'], 'started')
         deadline = time.monotonic() + 5
-        while not marker.exists() and time.monotonic() < deadline:
+        while (not marker.exists() or not marker.stat().st_size) and time.monotonic() < deadline:
             time.sleep(0.02)
         self.assertTrue(marker.exists())
-        pid, config = json.loads(marker.read_text())
+        pid, directory = json.loads(marker.read_text())
+        self.assertEqual(list(Path(directory).iterdir()), [])
         proc.terminate()
         stdout, stderr = proc.communicate(timeout=10)
         self.assertEqual(json.loads(stdout)['error_code'], 'cancelled')
         self.assertEqual(stderr, '')
-        self.assertFalse(Path(config).exists())
+        self.assertFalse(Path(directory).exists())
         self.assertFalse(Path(self.body['output']).exists())
         with self.assertRaises(ProcessLookupError):
             os.kill(pid, 0)

@@ -71,19 +71,27 @@ class ReviewTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.store.prepare_cache(str(link))
         with self.assertRaises(ValueError):self.store.prepare_cache(str(self.store.objects))
 
-    def test_config_private_at_creation_and_existing_file_not_overwritten(self):
-        req = engines.Request('babeldoc',Path(sys.executable),self.source,self.root/'out','https://provider.test','model')
-        original = os.open
-        calls = []
-        def track(path, flags, mode=0o777, **kw):
-            calls.append((flags,mode));return original(path, flags, mode, **kw)
-        with patch('integrations.engines.os.open', side_effect=track):
-            config = engines.private_config(req,self.root/'config','secret')
-        self.assertEqual(calls[0][1],0o600)
-        self.assertTrue(calls[0][0] & os.O_EXCL)
-        before = config.read_bytes()
-        with self.assertRaises(FileExistsError):engines.private_config(req,self.root/'config','other')
-        self.assertEqual(config.read_bytes(),before)
+    def test_request_validation_does_not_create_or_overwrite_files(self):
+        req = engines.Request(
+            'babeldoc', Path(sys.executable), self.source, self.root / 'out',
+            'https://provider.test', 'model', allow_document_upload=True,
+            allow_asset_download=True,
+        )
+        existing = self.root / 'config.toml'
+        existing.write_text('unrelated configuration')
+        before = existing.read_bytes()
+        payload = engines.request_input(req, 'synthetic-secret')
+        self.assertEqual(json.loads(payload)['api_key'], 'synthetic-secret')
+        self.assertEqual(existing.read_bytes(), before)
+        self.assertFalse(req.output.exists())
+        with patch.object(engines, 'check_version') as check_version, \
+             patch.object(engines.tempfile, 'mkdtemp') as create_directory:
+            for key in ('', 'key\nsecret', 'x' * 16385):
+                with self.subTest(size=len(key)), self.assertRaises(ValueError):
+                    engines.run(req, key)
+        check_version.assert_not_called()
+        create_directory.assert_not_called()
+        self.assertEqual(existing.read_bytes(), before)
 
     def test_bad_ports_os_environment_and_metadata_limits(self):
         req = engines.Request('babeldoc',Path(sys.executable),self.source,self.root/'out','https://provider.test','model',allow_document_upload=True,allow_asset_download=True)

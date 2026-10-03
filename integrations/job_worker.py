@@ -42,7 +42,7 @@ def object_without_duplicates(pairs):
         result[key] = value
     return result
 
-def parse_request(raw):
+def parse_request(raw, *, output_ready=False):
     if len(raw) > MAX_INPUT_BYTES:
         raise ValueError('Request too large')
     body = json.loads(raw, object_pairs_hook=object_without_duplicates,
@@ -75,7 +75,7 @@ def parse_request(raw):
                           Path(body['output']), body['endpoint'], body['model'],
                           body['source_language'], body['target_language'], body['pages'],
                           body['timeout'], True, True)
-    engines.validate(req)
+    engines.validate(req, output_ready=output_ready)
     return job_id, req, body['api_key']
 
 def emit(job_id, event, status, **extra):

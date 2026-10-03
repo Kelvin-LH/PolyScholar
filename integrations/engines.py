@@ -11,6 +11,7 @@ import signal
 import shutil
 import subprocess
 import tempfile
+import threading
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -53,14 +54,19 @@ class Request:
     allow_asset_download: bool = False
 
 
-def validate(req):
+def validate(req, *, output_ready=False):
     if req.engine not in VERSIONS:
         raise ValueError('Unsupported engine')
     if not req.python.is_file() or not req.source.is_file():
         raise ValueError('Python executable and source PDF must exist')
     if req.source.suffix.lower() != '.pdf' or not pdf_header(req.source):
         raise ValueError('Input must be a PDF')
-    if req.output.exists() or req.output.is_symlink():
+    if output_ready:
+        # 仅可信子入口使用；普通任务仍必须创建全新目录。
+        # Only the trusted child accepts its parent's already-created directory.
+        if not req.output.is_dir() or req.output.is_symlink():
+            raise ValueError('Managed output directory is unavailable')
+    elif req.output.exists() or req.output.is_symlink():
         raise ValueError('Use a new output directory to prevent overwriting')
     parsed = urlsplit(req.endpoint)
     _ = parsed.port  # Reject malformed and out-of-range ports in every entry point.
@@ -87,41 +93,72 @@ def validate(req):
         raise ValueError('Explicit document processing and asset-download consent required')
 
 
-def command(req, config):
-    # Absolute paths and argv lists avoid shell evaluation and option injection.
-    args = [str(req.python.absolute()), '-I']
-    source, output = str(req.source.resolve()), str(req.output.resolve())
-    if req.engine == 'babeldoc':
-        args += ['-m', 'babeldoc.main', '--files', source, '--config', str(config),
-                 '--openai', '--lang-in', req.source_language, '--lang-out', req.target_language,
-                 '--output', output, '--watermark-output-mode', 'no_watermark']
-    else:
-        args += ['-m', 'pdf2zh.pdf2zh', source, '--service', 'openai', '--config', str(config),
-                 '--lang-in', req.source_language, '--lang-out', req.target_language,
-                 '--output', output, '--thread', '1']
-    if req.pages:
-        args += ['--pages', req.pages]
-    return args
+def command(req):
+    # 所有任务参数走 stdin；命令行只有可信脚本和解释器。
+    # Only the trusted launcher and interpreter appear in the OS command line.
+    entry = Path(__file__).resolve().with_name('engine_entry.py')
+    return [str(req.python.absolute()), '-I', str(entry)]
 
 
-def private_config(req, directory, api_key):
-    if not api_key:
-        raise ValueError('API key required; use a dummy token for an explicit local gateway')
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / ('config.toml' if req.engine == 'babeldoc' else 'config.json')
-    if req.engine == 'babeldoc':
-        body = '[babeldoc]\n' + '\n'.join(
-            key + ' = ' + json.dumps(value, ensure_ascii=False)
-            for key, value in [('openai-model', req.model), ('openai-base-url', req.endpoint),
-                               ('openai-api-key', api_key)]) + '\n'
+def request_input(req, api_key):
+    # 共用 worker 协议；序列化结果仅写入匿名管道，不保存配置文件。
+    # Reuse the worker protocol and deliver only through an anonymous pipe.
+    if __package__:
+        from .job_worker import MAX_INPUT_BYTES, parse_request
     else:
-        body = json.dumps({'translators': [{'name': 'openai', 'envs': {
-            'OPENAI_BASE_URL': req.endpoint, 'OPENAI_API_KEY': api_key,
-            'OPENAI_MODEL': req.model}}]})
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-        stream.write(body)
-    return path
+        from job_worker import MAX_INPUT_BYTES, parse_request
+    body = dict(
+        protocol_version=1, job_id='upstream', engine=req.engine,
+        python=str(req.python.absolute()), source=str(req.source.absolute()),
+        output=str(req.output.absolute()), endpoint=req.endpoint, model=req.model,
+        api_key=api_key, source_language=req.source_language,
+        target_language=req.target_language, pages=req.pages, timeout=req.timeout,
+        allow_document_upload=req.allow_document_upload,
+        allow_asset_download=req.allow_asset_download,
+    )
+    data = json.dumps(body, ensure_ascii=True).encode('utf-8') + b'\n'
+    if len(data) > MAX_INPUT_BYTES:
+        raise ValueError('Engine request exceeds the protocol limit')
+    parse_request(data)
+    return data
+
+
+class _InputDelivery:
+    """Keep a non-reading child from blocking the adapter's timeout.
+
+    子进程不读取 stdin 时，管道写入不能阻断父进程的超时和终止。
+    """
+
+    def __init__(self, stream, data):
+        self.failed = False
+        self._thread = threading.Thread(
+            target=self._write, args=(stream, data), daemon=True,
+            name='polyscholar-engine-input',
+        )
+
+    def _write(self, stream, data):
+        try:
+            stream.write(data)
+            stream.flush()
+        except (OSError, ValueError):
+            self.failed = True
+        finally:
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                self.failed = True
+
+    def start(self):
+        self._thread.start()
+
+    def finish(self):
+        # Call only after process-tree termination; a live reader can hold the pipe.
+        # 先确认进程树终止，再等待写入线程回收，避免活读者持有管道。
+        if self._thread.ident is None:
+            return
+        self._thread.join(timeout=5)
+        if self._thread.is_alive():
+            raise ProcessCleanupError('Engine input delivery did not stop')
 
 
 def limited_environment():
@@ -166,6 +203,7 @@ def stop_process(proc):
 
 def run(req, api_key):
     validate(req)
+    payload = request_input(req, api_key)
     env = limited_environment()
     check_version(req, env)
     source_hash = file_hash(req.source)
@@ -175,24 +213,32 @@ def run(req, api_key):
     output_created = False
     succeeded = False
     try:
-        config = private_config(req, temp, api_key)
+        launch_command = command(req)
         req.output.mkdir(parents=True, exist_ok=False, mode=0o700)
         output_created = True
-        proc = start_process(command(req, config), cwd=temp, env=env,
+        proc = start_process(launch_command, cwd=temp, env=env, stdin=subprocess.PIPE,
                              start_new_session=(os.name == 'posix'))
+        delivery = _InputDelivery(proc.stdin, payload)
         try:
+            delivery.start()
             try:
                 result = proc.wait(timeout=req.timeout)
             except subprocess.TimeoutExpired:
-                stop_process(proc)
                 raise EngineError('timeout', 'Engine timed out; remote requests may still be billed') from None
             except KeyboardInterrupt:
-                stop_process(proc)
                 raise EngineError('cancelled', 'Engine interrupted; remote requests may still be billed') from None
         finally:
-            if isinstance(proc, WindowsProcess):
-                # 后代退出后才读取产物或回收配置。Stop descendants before cleanup.
-                stop_process(proc)
+            try:
+                # 即使父进程已退出也先结束后代；它们可能仍持有请求管道。
+                # Stop descendants even after parent exit; they may still hold stdin.
+                try:
+                    stop_process(proc)
+                except (OSError, subprocess.TimeoutExpired):
+                    raise ProcessCleanupError('Engine process-tree exit was not confirmed') from None
+            finally:
+                delivery.finish()
+        if delivery.failed:
+            raise EngineError('engine_failed', 'Engine request delivery failed')
         if result:
             raise EngineError('engine_failed', 'Engine failed; raw engine logs are suppressed to avoid exposing private data')
         if file_hash(req.source) != source_hash:

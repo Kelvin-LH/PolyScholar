@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 import importlib.util
+import json
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -50,20 +51,25 @@ class AdapterTests(unittest.TestCase):
         for endpoint in ['http://example.org','https://u:secret@example.org','https://example.org?token=x']:
             with self.assertRaises(ValueError):engines.validate(replace(self.req,endpoint=endpoint))
         with self.assertRaises(ValueError):engines.validate(replace(self.req,pages='3-1'))
-    def test_secret_not_in_argv_and_correct_engine_flags(self):
+    def test_private_request_uses_stdin_and_only_trusted_launcher_in_argv(self):
         for name in engines.VERSIONS:
-            req = replace(self.req,engine=name)
-            config = engines.private_config(req,self.base/name,'test-secret')
-            args = engines.command(req,config)
-            self.assertNotIn('test-secret',' '.join(args))
-            self.assertIn(str(self.source.resolve()),args)
-            self.assertIn('--config',args)
-            if sys.platform != 'win32':self.assertEqual(config.stat().st_mode & 0o777,0o600)
+            req = replace(self.req, engine=name)
+            args = engines.command(req)
+            self.assertEqual(args, [str(req.python.absolute()), '-I',
+                                    str(ROOT / 'integrations/engine_entry.py')])
+            payload = json.loads(engines.request_input(req, 'test-secret'))
+            self.assertEqual(payload['engine'], name)
+            self.assertEqual(payload['api_key'], 'test-secret')
+            self.assertEqual(payload['source'], str(self.source))
+            self.assertEqual(payload['pages'], '1-2')
+            for private in ('test-secret', str(self.source), req.endpoint, req.model):
+                self.assertNotIn(private, ' '.join(args))
+            self.assertFalse(req.output.exists())
     def test_preserves_virtualenv_python_symlink(self):
         binary=self.base/"venv-python"
         try:binary.symlink_to(sys.executable)
         except OSError:self.skipTest("Symlinks unavailable")
-        args=engines.command(replace(self.req,python=binary),self.base/"config.toml")
+        args=engines.command(replace(self.req,python=binary))
         self.assertEqual(args[0],str(binary.absolute()))
 
     def test_does_not_inherit_parent_provider_credentials(self):
@@ -73,34 +79,62 @@ class AdapterTests(unittest.TestCase):
             self.assertNotIn('POLYSCHOLAR_API_KEY',env)
     def test_real_subprocess_contract_and_cleanup(self):
         fake = self.base/'fake.py'
-        fake.write_text('''import pathlib,sys
-args=sys.argv
-out=pathlib.Path(args[args.index('--output')+1]);out.mkdir(exist_ok=True)
-config=pathlib.Path(args[args.index('--config')+1])
-assert 'test-secret' in config.read_text()
+        fake.write_text('''import json,os,pathlib,sys
+body=json.load(sys.stdin)
+key=body['api_key']
+assert key and key not in ' '.join(sys.argv)
+assert all(key not in value for value in os.environ.values())
+assert not list(pathlib.Path.cwd().iterdir())
+out=pathlib.Path(body['output'])
 (out/'translated.pdf').write_bytes(b'%PDF-1.4\\nsynthetic output\\n')
 ''')
-        configs=[]
-        original = engines.private_config
-        def track(req,directory,key):
-            config=original(req,directory,key);configs.append(config);return config
-        def fake_command(req,config):return [sys.executable,str(fake),'--output',str(req.output),'--config',str(config)]
+        working_dirs = []
+        processes = []
+        original = engines.start_process
+
+        def launch(*args, **kwargs):
+            working_dirs.append(Path(kwargs['cwd']))
+            process = original(*args, **kwargs)
+            processes.append(process)
+            return process
+
         for name in engines.VERSIONS:
             req=replace(self.req,engine=name,output=self.base/name)
-            with patch.object(engines,'check_version'),patch.object(engines,'command',side_effect=fake_command),patch.object(engines,'private_config',side_effect=track):
-                result=engines.run(req,'test-secret')
+            with patch.object(engines, 'check_version'), \
+                 patch.object(engines, 'command', return_value=[sys.executable, str(fake)]), \
+                 patch.object(engines, 'start_process', side_effect=launch), \
+                 patch.dict('os.environ', {'OPENAI_API_KEY': 'test-secret'}):
+                result = engines.run(req, 'test-secret')
             self.assertIn('translated.pdf',result['outputs'])
-            self.assertNotIn('test-secret',(req.output/'polyscholar-export.json').read_text())
-        self.assertTrue(all(not p.exists() for p in configs))
-    def test_timeout_stops_worker_and_cleans_config(self):
-        fake=self.base/'sleep.py';fake.write_text('import time;time.sleep(30)')
-        configs=[]
-        original=engines.private_config
-        def track(req,directory,key):
-            config=original(req,directory,key);configs.append(config);return config
-        with patch.object(engines,'check_version'),patch.object(engines,'command',return_value=[sys.executable,str(fake)]),patch.object(engines,'private_config',side_effect=track):
-            with self.assertRaisesRegex(RuntimeError,'timed out'):
-                engines.run(replace(self.req,timeout=1),'test-secret')
-        self.assertTrue(all(not p.exists() for p in configs))
+            self.assertTrue(all(b'test-secret' not in path.read_bytes()
+                                for path in req.output.rglob('*') if path.is_file()))
+        self.assertEqual(len(working_dirs), len(engines.VERSIONS))
+        self.assertTrue(all(not path.exists() for path in working_dirs))
+        self.assertTrue(all(process.poll() == 0 for process in processes))
+
+    def test_timeout_stops_worker_and_cleans_empty_working_directory(self):
+        fake = self.base / 'sleep.py'
+        fake.write_text('import json,sys,time\njson.load(sys.stdin)\ntime.sleep(30)')
+        working_dirs = []
+        processes = []
+        original = engines.start_process
+
+        def launch(*args, **kwargs):
+            directory = Path(kwargs['cwd'])
+            self.assertEqual(list(directory.iterdir()), [])
+            working_dirs.append(directory)
+            process = original(*args, **kwargs)
+            processes.append(process)
+            return process
+
+        with patch.object(engines, 'check_version'), \
+             patch.object(engines, 'command', return_value=[sys.executable, str(fake)]), \
+             patch.object(engines, 'start_process', side_effect=launch):
+            with self.assertRaisesRegex(RuntimeError, 'timed out'):
+                engines.run(replace(self.req, timeout=1), 'test-secret')
+        self.assertEqual(len(working_dirs), 1)
+        self.assertFalse(working_dirs[0].exists())
+        self.assertFalse(self.req.output.exists())
+        self.assertIsNotNone(processes[0].poll())
 
 if __name__ == '__main__':unittest.main()

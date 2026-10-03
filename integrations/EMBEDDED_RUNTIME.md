@@ -16,6 +16,10 @@ resources/runtime/
 resources/integrations/
   job_worker.py
   engines.py
+  engine_entry.py
+  managed_process.py
+  process_gate.py
+  windows_job.py
 ```
 
 Windows 对应 `runtime/<engine>/python.exe`。采用两份独立 CPython tree，依赖分别安装；避免两个上游的 PyMuPDF/BabelDOC 版本冲突，也避免外部 PYTHONPATH 和用户 site-packages。`bin/python3` 如为链接，目标必须在该独立 tree 内；不得复制依赖系统 Python 的 venv。后端从可信资源路径选择 binary，以 `-I` 做版本探测；worker 脚本按可信绝对资源路径调用，不能由 UI 提供 packagePath 或自由解释器路径。开发环境优先 `.runtime/<engine>/bin/python3`，`.venvs/` 仅兼容旧开发路径，不作为发行依赖。

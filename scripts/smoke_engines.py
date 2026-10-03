@@ -1,37 +1,40 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Validate real pinned upstream parsers without a document upload or model download."""
+"""Offline pinned parser/client checks; no translation or network calls.
+
+离线检查固定版真实解析器和客户端构造，不等同真实翻译/API验收。
+"""
+import argparse
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from integrations.engines import Request, check_version, command, limited_environment, private_config
+from integrations.engines import limited_environment
 ROOT = Path(__file__).resolve().parents[1]
 
 def main():
-    with tempfile.TemporaryDirectory(prefix='polyscholar-parser-') as temp:
-        base = Path(temp)
-        for name in ['babeldoc', 'pdfmathtranslate']:
-            binary = ROOT / '.venvs' / name / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
-            req = Request(name, binary, base/'sample.pdf', base/'output',
-                          'http://127.0.0.1:9999/v1', 'synthetic-model', pages='1-2')
-            env = limited_environment()
-            check_version(req, env)
-            config = private_config(req, base/name, 'synthetic-test-token')
-            module = 'babeldoc.main' if name == 'babeldoc' else 'pdf2zh.pdf2zh'
-            code = ('import importlib,sys; '
-                    'm=importlib.import_module(' + repr(module) + '); '
-                    'a=m.create_parser().parse_args(sys.argv[1:]); '
-                    'assert a.lang_in=="en" and a.lang_out=="zh" and a.pages=="1-2"; ')
-            if name == 'babeldoc':
-                code += 'assert a.openai_model=="synthetic-model"; assert a.openai_api_key=="synthetic-test-token"; '
-            else:
-                code += 'assert a.service=="openai"; '
-            code += 'print("Pinned upstream parser passed")'
-            args = command(req, config)
-            subprocess.run([str(binary), '-I', '-c', code, *args[args.index(module)+1:]],
-                           env=env, cwd=base, check=True, timeout=60)
-            print(name, 'version and real argument parser passed; no translation executed')
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--runtime', type=Path, default=ROOT / '.runtime')
+    args = parser.parse_args()
+    helper = Path(__file__).with_name('engine_memory_probe.py').absolute()
+    with tempfile.TemporaryDirectory(prefix='polyscholar-engine-memory-check-') as temporary:
+        for engine in ('babeldoc', 'pdfmathtranslate'):
+            binary = args.runtime.absolute() / engine / (
+                'python.exe' if sys.platform == 'win32' else 'bin/python3')
+            result = subprocess.run(
+                [str(binary), '-I', str(helper), engine, temporary],
+                cwd=temporary, env=limited_environment(),
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                timeout=90,
+            )
+            expected = [b'Pinned engine memory configuration checks passed']
+            if result.returncode != 0 or result.stdout.splitlines() != expected:
+                raise RuntimeError('Pinned offline engine configuration check failed')
+            print(engine + ' parser, memory configuration and client checks passed; '
+                  'no translation or network executed', flush=True)
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception:
+        raise SystemExit('Pinned offline engine configuration check failed')

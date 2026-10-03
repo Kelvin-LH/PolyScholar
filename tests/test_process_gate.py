@@ -85,8 +85,8 @@ class EngineCleanupTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.source = self.root / 'source.pdf'
         self.source.write_bytes(b'%PDF-1.4 synthetic')
-        self.config_dir = self.root / 'private'
-        self.config_dir.mkdir(mode=0o700)
+        self.working_dir = self.root / 'private'
+        self.working_dir.mkdir(mode=0o700)
         self.req = engines.Request(
             'babeldoc', Path(sys.executable), self.source, self.root / 'output',
             'https://api.example.test', 'synthetic-model',
@@ -94,31 +94,34 @@ class EngineCleanupTests(unittest.TestCase):
         )
         self.enterContext(patch.object(engines, 'check_version'))
         self.enterContext(patch.object(engines.tempfile, 'mkdtemp',
-                                       return_value=str(self.config_dir)))
+                                       return_value=str(self.working_dir)))
 
-    def test_unconfirmed_tree_cleanup_preserves_config_and_rejects_success(self):
+    def test_unconfirmed_tree_cleanup_preserves_empty_cwd_and_rejects_success(self):
         with patch.object(engines, 'start_process',
                           side_effect=ProcessCleanupError('Synthetic cleanup failure')):
             with self.assertRaises(engines.EngineError) as caught:
                 engines.run(self.req, 'synthetic-token')
         self.assertEqual(caught.exception.code, 'io_error')
-        self.assertTrue((self.config_dir / 'config.toml').is_file())
+        self.assertTrue(self.working_dir.is_dir())
+        self.assertEqual(list(self.working_dir.iterdir()), [])
+        self.assertTrue(self.req.output.is_dir())
+        self.assertEqual(list(self.req.output.iterdir()), [])
         self.assertFalse((self.req.output / 'polyscholar-export.json').exists())
 
     def test_output_directory_race_does_not_delete_an_unowned_directory(self):
-        original = engines.private_config
+        original = engines.command
 
         def create_competing_output(*args):
-            config = original(*args)
+            command = original(*args)
             self.req.output.mkdir()
             (self.req.output / 'unrelated.txt').write_text('preserve')
-            return config
+            return command
 
-        with patch.object(engines, 'private_config', side_effect=create_competing_output):
+        with patch.object(engines, 'command', side_effect=create_competing_output):
             with self.assertRaises(engines.EngineError):
                 engines.run(self.req, 'synthetic-token')
         self.assertEqual((self.req.output / 'unrelated.txt').read_text(), 'preserve')
-        self.assertFalse(self.config_dir.exists())
+        self.assertFalse(self.working_dir.exists())
 
 
 if __name__ == '__main__':

@@ -25,22 +25,35 @@ class WorkerFailureTests(unittest.TestCase):
 
     def assert_worker_failure(self, program, message):
         worker = self.base / "worker.py"
-        worker.write_text(program, encoding="utf-8")
-        configs = []
-        original = engines.private_config
+        # 先消费真实输入，避免管道提前关闭掩盖目标失败路径。
+        # Consume the request so BrokenPipe cannot mask the intended failure.
+        worker.write_text(
+            "import json,os,pathlib,sys\n"
+            "body=json.load(sys.stdin)\n"
+            "assert body['api_key'] not in ' '.join(sys.argv)\n"
+            "assert all(body['api_key'] not in v for v in os.environ.values())\n"
+            "assert not list(pathlib.Path.cwd().iterdir())\n" + program,
+            encoding="utf-8",
+        )
+        directories = []
+        processes = []
+        original = engines.start_process
 
-        def capture(req, directory, key):
-            config = original(req, directory, key)
-            configs.append(config)
-            return config
+        def launch(*args, **kwargs):
+            directories.append(Path(kwargs['cwd']))
+            process = original(*args, **kwargs)
+            processes.append(process)
+            return process
 
         with patch.object(engines, "check_version"), \
-             patch.object(engines, "private_config", side_effect=capture), \
+             patch.object(engines, "start_process", side_effect=launch), \
              patch.object(engines, "command", return_value=[sys.executable, str(worker)]):
             with self.assertRaisesRegex(RuntimeError, message):
                 engines.run(self.req, "synthetic-secret")
-        self.assertTrue(configs, "Worker must have received a private config")
-        self.assertTrue(all(not config.exists() for config in configs))
+        self.assertEqual(len(directories), 1)
+        self.assertFalse(directories[0].exists())
+        self.assertIsNotNone(processes[0].poll())
+        self.assertFalse(self.req.output.exists())
         self.assertFalse((self.req.output / "polyscholar-export.json").exists())
 
     def test_nonzero_exit_is_not_success_and_cleans_credentials(self):

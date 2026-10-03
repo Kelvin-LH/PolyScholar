@@ -4,6 +4,10 @@
 
 日期：2026-10-02；本机 macOS，Python 3.9/3.12。
 
+## 内存凭据入口离线复核（2026-10-03）
+
+当前适配器已移除含密钥的临时配置文件，BabelDOC 使用真实解析器的内存配置，pdf2zh 在高层导入前安装内存配置管理。`scripts/smoke_engines.py` 已在两套实际自带运行时通过真实解析器、OpenAI 客户端构造及配置保存检查，使用合成令牌和用户配置哨兵。夹具隔离缓存发现，阻断 Python 网络调用、替换最终翻译入口；没有执行全文翻译、资源下载或模型 API。源代码硬退出/管道/清理证据及尚未通过的门槛见 [整改追踪](14-review-remediation.md)。下方原 TOML/JSON 检查是历史实现证据，不作为当前凭据路径。
+
 ## 冻结导入流程补验（2026-10-03）
 
 后续源码 `d83c4c0` 的 [三平台专用冻结 CI 37023285205](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37023285205) 已全部成功：Windows AMD64/Linux x86_64/macOS arm64 各自重建运行时及冻结包，执行实际 GUI 启动、PDF/三格式引文/子进程/持久化和整包中文路径迁移检查；迁移前缀内两引擎版本及 pip check 成功。协调者核对 job/step conclusion 和各 JSON 验收字段，sourceCommit 一致。该证据关闭这些冻结组件检查；干净系统安装、完整迁移 GUI、真实 Zotero 内容、真实模型/翻译、Windows ACL/凭据清理及签名公证等仍未验收。CI 没有上传包或发布下载。
