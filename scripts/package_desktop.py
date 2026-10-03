@@ -13,6 +13,19 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from integrations.engines import limited_environment, stop_process
+from smoke_engines import verify_engines
+
+
+def verify_packaged_engines(artifact):
+    """Inspect only the bundled integration scripts with their embedded Python.
+
+    仅检查包内集成脚本与自带 Python，不允许退回源码树。
+    """
+    resources = (
+        artifact / 'Contents/Resources/resources'
+        if sys.platform == 'darwin' else artifact / '_internal/resources'
+    )
+    verify_engines(resources / 'runtime', resources / 'integrations')
 
 
 def verify_desktop(artifact):
@@ -57,6 +70,10 @@ def main():
         relative = 'python.exe' if sys.platform == 'win32' else 'bin/python3'
         if not (runtime/engine/relative).is_file(): parser.error('Embedded runtime missing; run prepare_runtime.py first')
     if not (runtime/'runtime-manifest.json').is_file(): parser.error('Verified runtime manifest missing')
+    # A failed rebuild must not leave an earlier success record for this output.
+    # 重建开始前使旧成功记录失效；后续任何失败都不能沿用上一轮验收。
+    manifest_path = dist / 'package-manifest.json'
+    manifest_path.unlink(missing_ok=True)
     # Stage a plain script entrypoint; no -m assumption and no relative-import ambiguity.
     work = ROOT/'.tools/python-build'
     work.mkdir(parents=True, exist_ok=True)
@@ -95,6 +112,7 @@ def main():
     subprocess.run([sys.executable, str(ROOT/'scripts/prepare_runtime.py'), '--verify-only',
                     '--output', str(target_runtime)], cwd=ROOT, check=True)
     verify_desktop(artifact)
+    verify_packaged_engines(artifact)
     if args.codesign_identity:
         if sys.platform != 'darwin': parser.error('codesign identity is supported only on macOS')
         subprocess.run(['codesign', '--force', '--deep', '--options', 'runtime', '--sign',
@@ -103,8 +121,9 @@ def main():
                     python_install_required=False, runtime_included=True,
                     runtime_final_prefix_verified=True, frozen_gui_startup_verified=True,
                     local_import_checks_verified=True,
+                    embedded_engine_memory_configuration_verified=True,
                     signed=bool(args.codesign_identity), notarized=False)
-    (dist/'package-manifest.json').write_text(json.dumps(manifest, indent=2)+'\n', encoding='utf-8')
+    manifest_path.write_text(json.dumps(manifest, indent=2)+'\n', encoding='utf-8')
     print('Packaged desktop application:', artifact, flush=True)
 
 if __name__ == '__main__': main()

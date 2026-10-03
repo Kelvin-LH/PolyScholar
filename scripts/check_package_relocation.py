@@ -11,7 +11,7 @@ import platform
 import re
 import tempfile
 
-from package_desktop import verify_desktop
+from package_desktop import verify_desktop, verify_packaged_engines
 from prepare_runtime import VERSIONS, verify
 
 
@@ -69,6 +69,7 @@ class PackageRelocationCheck:
             self.artifact.rename(moved)
             relocated = True
             verify_desktop(moved)
+            verify_packaged_engines(moved)
             resources = (
                 moved / 'Contents/Resources/resources'
                 if platform.system() == 'Darwin'
@@ -104,6 +105,7 @@ class PackageRelocationCheck:
                 'offlineBibTeXRisCslJsonImport': True,
                 'localImportPersistenceAfterReopen': True,
                 'isolatedPdfValidationAndChildCleanup': True,
+                'bundledEngineMemoryConfiguration': True,
                 'embeddedRuntimeChecks': {
                     engine: {
                         'pythonMajorMinor': '3.12',
@@ -119,6 +121,7 @@ class PackageRelocationCheck:
                 'cleanMachineInstalled': True,
                 'signing': True,
                 'realTranslation': True,
+                'realEngineCrashRecovery': True,
                 'realZoteroContentMigration': True,
             },
         }

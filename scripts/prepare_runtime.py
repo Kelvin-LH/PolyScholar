@@ -62,7 +62,6 @@ def verify(runtime, engine, work):
     # PATH deliberately excludes all host interpreters and user-site directories.
     env['PATH'] = str(runtime/'bin') if os.name != 'nt' else str(runtime)
     package, expected = VERSIONS[engine]
-    module = 'babeldoc.main' if engine == 'babeldoc' else 'pdf2zh.pdf2zh'
     code = ('import importlib.metadata,sys; '
             'assert sys.version_info[:2]==(3,12); '
             'assert importlib.metadata.version(' + repr(package) + ')=='+repr(expected)+'; '
@@ -70,8 +69,17 @@ def verify(runtime, engine, work):
     if engine == 'babeldoc':
         code += "; assert importlib.metadata.version('PyMuPDF')=='1.28.2'"
     subprocess.run([str(py), '-I', '-c', code], env=env, cwd=work, check=True, timeout=30)
-    subprocess.run([str(py), '-I', '-m', module, '--version'], env=env, cwd=work,
-                   check=True, timeout=90)
+    # The real CLI imports caches even for --version; keep that IO in this check.
+    # 真实 CLI 的 --version 也会导入缓存，路径发现限定在检查临时目录。
+    with tempfile.TemporaryDirectory(prefix='version-', dir=work) as temporary:
+        version_env = {
+            name: value for name, value in env.items()
+            if name in ('PATH', 'HOME', 'USERPROFILE', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP')
+        }
+        subprocess.run([
+            str(py), '-I', str(ROOT / 'scripts/engine_version_probe.py'),
+            engine, str(Path(temporary) / 'home'),
+        ], env=version_env, cwd=temporary, check=True, timeout=90)
     subprocess.run([str(py), '-I', '-m', 'pip', 'check'], env=env, cwd=work,
                    check=True, timeout=60)
 

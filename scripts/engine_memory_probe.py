@@ -4,19 +4,84 @@
 夹具隔离缓存发现并阻断网络，不替换上游解析器或翻译器类。
 """
 from contextlib import redirect_stderr, redirect_stdout
+import importlib
+import importlib.util
+import io
 import os
 from pathlib import Path
 import sys
 import socket
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from integrations import engine_entry, engines
+COMPONENTS = (
+    'engine_entry', 'engines', 'job_worker', 'managed_process',
+    'process_gate', 'windows_job',
+)
+
+
+def assert_component_origins(root):
+    """Every integration import must come from the explicitly selected package.
+
+    所有集成模块都必须来自指定包目录；不接受源码回退或模块替身。
+    """
+    root = Path(root).resolve(strict=True)
+    for name in ('integrations', *('integrations.' + item for item in COMPONENTS)):
+        module = sys.modules.get(name)
+        filename = '__init__.py' if name == 'integrations' else name.rsplit('.', 1)[1] + '.py'
+        expected = root / filename
+        if (module is None or getattr(module, '__file__', None) is None
+                or Path(module.__file__).resolve(strict=True) != expected
+                or getattr(module, '__spec__', None) is None
+                or Path(module.__spec__.origin).resolve(strict=True) != expected):
+            raise RuntimeError('Integration component origin does not match')
+    package = sys.modules['integrations']
+    if ([Path(item).resolve() for item in package.__path__] != [root]
+            or [Path(item).resolve() for item in package.__spec__.submodule_search_locations]
+            != [root]):
+        raise RuntimeError('Integration package search path does not match')
+    entry = sys.modules['integrations.engine_entry']
+    engines = sys.modules['integrations.engines']
+    worker = sys.modules['integrations.job_worker']
+    if entry.engines is not engines or entry.job_worker is not worker or worker.engines is not engines:
+        raise RuntimeError('Integration components use foreign dependencies')
+
+
+def load_integrations(directory):
+    directory = Path(directory).absolute()
+    if directory.is_symlink():
+        raise RuntimeError('Integration directory must not redirect outside the package')
+    root = directory.resolve(strict=True)
+    if not root.is_dir():
+        raise RuntimeError('Integration directory is missing')
+    for filename in ('__init__.py', *(item + '.py' for item in COMPONENTS)):
+        path = root / filename
+        if not path.is_file() or path.resolve(strict=True) != path:
+            raise RuntimeError('Integration component is missing or points outside the package')
+    if any(name == 'integrations' or name.startswith('integrations.') for name in sys.modules):
+        raise RuntimeError('Integration components were loaded before the origin check')
+    spec = importlib.util.spec_from_file_location(
+        'integrations', root / '__init__.py', submodule_search_locations=[str(root)])
+    if spec is None or spec.loader is None:
+        raise RuntimeError('Integration package cannot be loaded')
+    package = importlib.util.module_from_spec(spec)
+    sys.modules['integrations'] = package
+    spec.loader.exec_module(package)
+    for name in COMPONENTS:
+        importlib.import_module('integrations.' + name)
+    assert_component_origins(root)
+    return sys.modules['integrations.engine_entry'], sys.modules['integrations.engines']
 
 
 class MemoryConfigurationProbe:
-    def __init__(self, engine, root):
+    def __init__(self, engine, root, integrations):
+        if engine not in ('babeldoc', 'pdfmathtranslate'):
+            raise ValueError('Unsupported probe engine')
+        # Loading selected package components must not add bytecode to the bundle.
+        # 验证夹具不能因导入而向待验收安装包写入字节码。
+        sys.dont_write_bytecode = True
+        self.integrations = Path(integrations)
+        self.engine_entry, self.engines = load_integrations(self.integrations)
+        self.inspections = 0
         self.engine = engine
         self.root = Path(root) / engine
         self.root.mkdir()
@@ -31,7 +96,6 @@ class MemoryConfigurationProbe:
         self.source = self.root / 'synthetic.pdf'
         self.source.write_bytes(b'%PDF-1.4\n% Parser-only synthetic fixture\n')
         self.output = self.root / 'output'
-        self.output.mkdir()
 
     def audit(self, event, args):
         if event in ('socket.connect', 'socket.getaddrinfo', 'socket.bind'):
@@ -66,6 +130,7 @@ class MemoryConfigurationProbe:
                 api_key=namespace.openai_api_key,
             )
             self.assert_client(translator)
+            self.inspections += 1
         prepared.upstream.cli = inspect
 
     def inspect_pdfmathtranslate(self, prepared):
@@ -92,16 +157,19 @@ class MemoryConfigurationProbe:
             ConfigManager.set('synthetic-probe-default', 'memory-only')
             if not saved or ConfigManager.get('synthetic-probe-default') != 'memory-only':
                 raise RuntimeError('Configuration persistence boundary was not exercised')
+            self.inspections += 1
             return 0
         prepared.upstream.main = inspect
 
     def run(self):
+        engines, engine_entry = self.engines, self.engine_entry
         req = engines.Request(
             self.engine, Path(sys.executable), self.source, self.output,
             'http://127.0.0.1:9999/v1', 'synthetic-model', pages='1-2',
             allow_document_upload=True, allow_asset_download=True,
         )
-        engines.check_version(req, engines.limited_environment())
+        payload = engines.request_input(req, self.key)
+        self.output.mkdir()
         original_environment = {
             name: os.environ.get(name) for name in ('HOME', 'USERPROFILE')
         }
@@ -127,15 +195,28 @@ class MemoryConfigurationProbe:
         with patch.object(Path, 'home', return_value=self.home), \
                 patch('os.path.expanduser', side_effect=isolated_expanduser), \
                 patch.object(socket.socket, 'bind', side_effect=refuse_passive_bind):
-            prepared = engine_entry.prepare(req, self.key)
-            if self.engine == 'babeldoc':
-                self.inspect_babeldoc(prepared)
-            else:
-                self.inspect_pdfmathtranslate(prepared)
-            # Replace the final translation call, retaining real parser and client.
-            # 只替换最终翻译调用，保留真实解析器和客户端，不称翻译成功。
-            if prepared.run() != 0:
-                raise RuntimeError('Offline inspection did not finish')
+            original_prepare = engine_entry.prepare
+
+            def prepare_and_inspect(actual_req, actual_key):
+                if actual_req != req or actual_key != self.key:
+                    raise RuntimeError('Stdin entry changed the selected request')
+                prepared = original_prepare(actual_req, actual_key)
+                if self.engine == 'babeldoc':
+                    self.inspect_babeldoc(prepared)
+                else:
+                    self.inspect_pdfmathtranslate(prepared)
+                return prepared
+
+            # Exercise the actual stdin parser and pinned checks. Only replace the
+            # final translation call, retaining the real parser and client.
+            # 走真实 main/stdin 校验；只替换最终翻译调用，不称翻译成功。
+            with io.TextIOWrapper(io.BytesIO(payload), encoding='utf-8') as incoming, \
+                    patch.object(sys, 'stdin', incoming), \
+                    patch.object(sys, 'argv', [str(engine_entry.__file__)]), \
+                    patch.object(engine_entry, 'prepare', side_effect=prepare_and_inspect):
+                if engine_entry.main() != 0 or self.inspections != 1:
+                    raise RuntimeError('Offline inspection did not finish')
+        assert_component_origins(self.integrations)
         self.finished = True
         if self.sentinel.read_bytes() != self.original or self.network_attempts:
             raise RuntimeError('Probe touched configuration or attempted network')
@@ -156,9 +237,9 @@ def main():
             os.dup2(quiet.fileno(), 1)
             os.dup2(quiet.fileno(), 2)
             try:
-                if len(sys.argv) != 3:
+                if len(sys.argv) != 4:
                     raise ValueError('Invalid fixture invocation')
-                MemoryConfigurationProbe(sys.argv[1], sys.argv[2]).run()
+                MemoryConfigurationProbe(sys.argv[1], sys.argv[2], sys.argv[3]).run()
                 outcome = 0
             except BaseException:
                 outcome = 1

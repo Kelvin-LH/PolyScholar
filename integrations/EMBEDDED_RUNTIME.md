@@ -34,6 +34,8 @@ CPython 固定官方 [python-build-standalone 20260929](https://github.com/astra
 
 主程序采用 Python + PySide6 QtWidgets/QtPdf 原生桌面。PySide6 6.11.2 已从官方 Qt 发行索引和仓库标签核验；Qt 文档支持使用 PyInstaller 发行。构建环境执行 `.venvs/desktop/bin/python scripts/package_desktop.py`。PyInstaller 6.19.0 冻结主程序与 Qt，之后复制两份完整独立引擎 runtime，保持可执行权限、相对链接和上游许可文件。最终位置 macOS 为 `PolyScholar.app/Contents/Resources/resources/`，Windows/Linux 为 `PolyScholar/_internal/resources/`。主程序根据冻结环境从可信资源目录选择引擎；禁止用户配置解释器路径。脚本再次在最终安装前缀执行引擎版本验证，不把 builder 本机 Python 当作用户依赖。
 
+构建与整包迁移检查还使用明确的包内 `runtime`/`integrations` 路径，核对模块来源并执行入口、解析器及内存配置检查；不允许退回仓库源码。最终翻译调用被离线夹具替换，不能代替真实翻译/API或崩溃验收。版本 CLI 在临时配置发现路径运行，HOME/USERPROFILE 不变。重建开始前使旧成功清单失效，全部检查完成才记录本次成功。
+
 Python/依赖资源必须随发行保留各自许可和版权文件，macOS 签名、公证需涵盖内置动态库。脚本可接收维护者 `--codesign-identity`，未提供时只得到开发制品，不宣称正式签名/公证或跨平台已测。模型/字体是后续本机缓存资源，与 Python 解释器打包区分；按用户默认授权策略准备资源。app 的用户数据库、密钥、结果和缓存写入 app_data/cache，不能写入只读应用资源目录。
 
 Linux 原生 Qt 启动需要系统图形库。Ubuntu CI 已发现并显式安装 `libegl1`；发行包需要列出/提供对应平台依赖，而不是要求用户安装 Python。Windows/macOS 原生启动已在 CI 通过，完整安装发行仍待验收。

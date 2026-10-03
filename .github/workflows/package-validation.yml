@@ -61,8 +61,8 @@ jobs:
               'relocation': json.loads((root / 'relocation-evidence.json').read_text()),
           }
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
-              summary.write('Frozen component checks with synthetic local data.\n\n')
-              summary.write('Clean-machine installation and real translation remain unverified.\n\n')
+              summary.write('Frozen components and bundled engine memory configuration checked with synthetic local data.\n\n')
+              summary.write('Clean-machine installation, real translation and real engine crash recovery remain unverified.\n\n')
               summary.write('```json\n' + json.dumps(evidence, indent=2) + '\n```\n')
           print(json.dumps(evidence, indent=2))
           PY
