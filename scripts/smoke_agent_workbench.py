@@ -55,12 +55,12 @@ def main():
             window.show()
             app.processEvents()
             assert window.width() == 1024, (window.width(), window.minimumSizeHint().width())
-            assert window.nav.count() == 6 and window.nav.item(3).text() == '证据摘要'
+            assert window.nav.count() == window.stack.count() == 5 and window.nav.item(3).text() == '证据摘要'
             window.activateWindow()
             app.processEvents()
-            QTest.keyClick(window, Qt.Key.Key_6, Qt.KeyboardModifier.ControlModifier)
+            QTest.keyClick(window, Qt.Key.Key_5, Qt.KeyboardModifier.ControlModifier)
             app.processEvents()
-            assert window.nav.currentRow() == 5
+            assert window.nav.currentRow() == 4
             window.find_action.trigger()
             app.processEvents()
             assert window.nav.currentRow() == 0 and window.search.hasFocus()
@@ -75,7 +75,7 @@ def main():
             for row in range(window.document_list.count()):
                 if window.document_list.item(row).data(Qt.ItemDataRole.UserRole)['id'] == document['id']:
                     window.document_list.setCurrentRow(row)
-            assert window.score_headers['paper'].text() == '报告评分 84 / 100'
+            assert window.score_headers['paper'].text().endswith('84 / 100')
             assert window.abstract.toPlainText().startswith('A synthetic paper')
             window.fields['title'].setText('Efficient Reading with Local Research Tools')
             window.save_doc()
@@ -105,7 +105,7 @@ def main():
             QTest.keyClick(dialog, Qt.Key.Key_Escape)
             app.processEvents()
             assert dialog._closed
-            window.nav.setCurrentRow(5)
+            window.nav.setCurrentRow(window.nav.count()-1)
             app.processEvents()
             capture(window, 'settings-python.png')
             window.nav.setCurrentRow(0)

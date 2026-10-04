@@ -14,13 +14,22 @@ import uuid
 from urllib.request import Request, build_opener
 from .store import LocalStore
 from .workbench import AgentWorkbenchService
+from .code_review import CodeReviewService
 from .model_endpoint import endpoint_url
 from .metadata import exchange_metadata
 from .citation_import import CitationImporter
 from .zotero_migration import ZoteroMigrationImporter
 from .summary_model import selected_blocks, request_summary, NoRedirect
-from integrations.engines import VERSIONS, limited_environment
-from integrations.managed_process import WindowsProcess, start_process
+from integrations.engines import VERSIONS, limited_environment, stop_process
+from integrations.managed_process import WindowsProcess, start_process, run_captured
+
+from integrations.github_snapshot import empty_report, repository_url, MAX_REPORT_BYTES
+
+VERIFICATION_TIMEOUT = 60
+
+
+class VerificationTimeout(ValueError):
+    """Budget expiration is distinct from invalid worker output / 超时与无效响应分开。"""
 
 MAX_EVENT = 1024 * 1024
 ERROR_CODES = {'invalid_request','engine_unavailable','engine_failed','timeout','cancelled','source_changed','invalid_output','io_error','internal_error','protocol_error'}
@@ -35,7 +44,7 @@ def app_data_dir():
         return Path.home() / 'Library/Application Support/PolyScholar'
     return Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')) / 'PolyScholar'
 
-class LocalService(AgentWorkbenchService):
+class LocalService(CodeReviewService, AgentWorkbenchService):
     def __init__(self, data_dir=None, resources_dir=None):
         self.store = LocalStore(data_dir or app_data_dir())
         if resources_dir is None:
@@ -358,7 +367,7 @@ class LocalService(AgentWorkbenchService):
         if any(identifier in scope and self._children.get(key) is not None
                and self._children[key].poll() is None
                for key, identifier in self._child_documents.items()):
-            raise ValueError('请等待文献解析或摘要任务结束后操作。')
+            raise ValueError('请等待文献解析、摘要或外部核验任务结束后操作。')
 
     def list_duplicate_candidates(self, limit=200):
         return self.store.list_duplicate_candidates(limit)
@@ -671,13 +680,153 @@ class LocalService(AgentWorkbenchService):
         with self._lock:
             self._closed = True
             self._key = ''
-            children = list(self._children.values())
+            children = list(self._children.items())
             threads = list(self._threads.values())
             for cancellation in self._html_cancellations.values():
                 cancellation.set()
-        for child in children:
-            self._stop(child)
+        for identifier, child in children:
+            if identifier.startswith('verify-'):
+                self._stop_verification(child)
+            else:
+                self._stop(child)
         for thread in threads:
             thread.join(timeout=6)
         if not any(thread.is_alive() for thread in threads):
             self.store.close()
+
+
+    def verify_github(self, document_id, url, authorized=False):
+        """Only the explicit repository identifier crosses the worker boundary.
+
+        核验前必须确认外发范围；工作进程只收到仓库 URL，不收到论文或密钥。
+        """
+        normalized = repository_url(url)
+        if authorized is not True:
+            raise ValueError('GitHub 核验需要显式触发：只向 api.github.com 发送仓库标识，不发送论文正文、标题或模型密钥。')
+        document = self.verification_document(document_id)
+        document_id = document['id']
+        try:
+            report = self._run_github_worker(document_id, {'repository_url': normalized})
+        except VerificationTimeout:
+            report = empty_report(normalized)
+            report['error_code'] = 'timeout'
+        if report.get('repository_url') != normalized:
+            raise ValueError('核验返回的仓库与授权范围不一致，未保存报告。')
+        with self._lock:
+            if self._closed:
+                raise ValueError('应用正在关闭，核验结果未保存。')
+            return self.store.save_verification(document_id, report, document['sha256'])
+
+    def _run_github_worker(self, document_id, request):
+        """Share bounded process supervision across snapshot and code reads.
+
+        快照与代码读取共用有界进程托管；仅外发仓库及对象身份，不传论文。
+        """
+        worker = self.resources / 'integrations/github_snapshot.py'
+        if not worker.is_file() or getattr(sys, 'frozen', False):
+            raise ValueError('当前运行环境不能启动独立核验组件；冻结安装包的核验运行时尚未验收。')
+        identifier = 'verify-' + str(uuid.uuid4())
+        child_env = environment()
+        for name in ('HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY',
+                     'https_proxy', 'http_proxy', 'all_proxy', 'no_proxy'):
+            if name in os.environ:
+                child_env[name] = os.environ[name]
+
+        def started(child):
+            with self._lock:
+                if self._closed:
+                    raise ValueError('应用正在关闭。')
+                self.store.require_active(document_id)
+                self._children[identifier] = child
+                self._child_documents[identifier] = document_id
+
+        def finished(child):
+            with self._lock:
+                self._children.pop(identifier, None)
+                self._child_documents.pop(identifier, None)
+
+        try:
+            raw_request = json.dumps(request).encode('utf-8')
+            try:
+                # Reuse the branch's bounded capture and owned process tree.
+                # 复用新架构的有界捕获与进程树托管，Windows 硬退出也回收后代。
+                raw, _, exit_code, truncated = run_captured(
+                    [sys.executable, '-I', str(worker)], env=child_env,
+                    input_data=raw_request + b'\n', timeout=VERIFICATION_TIMEOUT,
+                    max_bytes=MAX_REPORT_BYTES, on_spawn=started, on_done=finished,
+                )
+            except subprocess.TimeoutExpired:
+                raise VerificationTimeout('核验超过 60 秒上限，网络进程已终止。') from None
+            else:
+                if exit_code or truncated:
+                    raise ValueError('外部核验已取消或组件返回无效结果，未保存报告。')
+                report = json.loads(raw)
+                if not isinstance(report, dict):
+                    raise ValueError('核验组件返回无效结果。')
+            with self._lock:
+                if self._closed:
+                    raise ValueError('应用正在关闭，核验结果未保存。')
+                return report
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, AttributeError):
+            raise ValueError('核验组件不可用或响应无效，请检查运行环境后重试。') from None
+
+    def cancel_verifications(self):
+        """Interrupt only network checks; preserve other IO shutdown contracts.
+
+        关闭窗口时终止核验网络进程，其他本地 IO 仍按原生命周期收尾。
+        """
+        with self._lock:
+            children = [child for key, child in self._children.items() if key.startswith('verify-')]
+        for child in children:
+            self._stop_verification(child)
+
+    @staticmethod
+    def _stop_verification(child):
+        # The owned Job/POSIX session also handles descendants after parent exit.
+        # 使用共用 Job / POSIX 会话，在父进程已退出时仍确认整棵进程树终止。
+        stop_process(child)
+
+    def import_research_report(self, document_id, path):
+        if not isinstance(path, (str, Path)):
+            raise ValueError('请指定本地研究报告 JSON 文件。')
+        try:
+            with Path(path).open('rb') as stream:
+                raw = stream.read(MAX_REPORT_BYTES + 1)
+            if len(raw) > MAX_REPORT_BYTES:
+                raise ValueError('研究报告不能超过 1 MiB。')
+            report = json.loads(raw)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise ValueError('研究报告文件不可读取或不是有效 UTF-8 JSON。') from None
+        if not isinstance(report, dict) or report.get('kind') != 'research':
+            raise ValueError('此入口只接受带来源的 research 报告，不接受外部评分或伪造 GitHub 快照。')
+        document = self.verification_document(document_id)
+        return self.store.save_verification(document['id'], report, document['sha256'])
+
+    def verification_document(self, document_id):
+        """Resolve fileless roots to a real PDF without inventing a digest.
+
+        无文件书目只映射到真实主要 PDF，不生成虚构哈希；对话框固定该身份。
+        """
+        self.store.require_active(document_id)
+        document = self.store.document(document_id)
+        if not document.get('sha256'):
+            identifier = self.store.primary_pdf_id(document_id)
+            if not identifier:
+                raise ValueError('外部核验需要绑定实际 PDF；请先为书目添加主要 PDF。')
+            self.store.require_active(identifier)
+            document = self.store.document(identifier)
+        return document
+
+    def list_verifications(self, document_id):
+        document = self.verification_document(document_id)
+        return self.store.list_verifications(document['id'])
+
+    def verification_report(self, document_id, report_id):
+        document = self.verification_document(document_id)
+        return self.store.verification_report(document['id'], report_id)
+
+    def export_verification(self, document_id, report_id, path):
+        report = self.verification_report(document_id, report_id)
+        data = json.dumps(report, ensure_ascii=False, indent=2).encode('utf-8')
+        self.store.write_export(path, data, extra_protected=[self.resources])
+        self.store.audit('external_verification_exported')

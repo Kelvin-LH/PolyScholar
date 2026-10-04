@@ -176,7 +176,7 @@ def main():
             target = window.citation_import_dialog
             assert target.collection.currentData()==collection['id']
             target.close()
-            assert window.width()==1024 and window.stack.widget(0).horizontalScrollBar().maximum()==0
+            assert window.width()==1024 and window.inspector_scroll.horizontalScrollBar().maximum()==0
             # 关闭只隐藏预览，主窗口等待其拥有的解析线程，不会晚导入数据。
             # Closing hides the preview; the window waits for its parser worker, without importing later.
             window.open_citation_import()

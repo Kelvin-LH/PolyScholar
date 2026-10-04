@@ -20,6 +20,8 @@ jobs:
       - name: Install pinned local citation parsers
         run: python -m pip install bibtexparser==1.4.4 rispy==0.10.0 pyparsing==3.3.2 keyring==25.6.0 mcp==2.3.0
       - run: python -m unittest discover -s tests -v
+      - name: Check real stdio MCP code report round trip with synthetic evidence
+        run: python scripts/smoke_code_review_mcp.py
       - run: python -m compileall -q polyscholar integrations
   native-gui:
     strategy:
@@ -100,3 +102,16 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python scripts/smoke_zotero_migration.py
+      - name: Check compact conclusions and citation dialog
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_layout.py
+      - name: Check compact conclusions at 200 percent
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_SCALE_FACTOR: '2'
+        run: python scripts/smoke_layout.py
+      - name: Check independent external reports with synthetic snapshots
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/smoke_verification.py

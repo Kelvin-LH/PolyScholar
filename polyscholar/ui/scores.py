@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from .managed_dialog import ManagedIODialog
 from .workers import safe_error
 
-KIND_NAMES = {'paper': '论文评阅', 'confidence': '证据评阅', 'summary': 'Agent 提炼'}
+KIND_NAMES = {'paper': '论文评阅', 'confidence': '文本内置信度', 'summary': 'Agent 提炼'}
 DIM_NAMES = {
     'novelty': '创新点', 'innovation_degree': '创新程度', 'effectiveness': '实际效果',
     'rigor': '方法严谨性', 'clarity': '表达清晰度', 'evidence': '证据支持',

@@ -36,9 +36,9 @@ def main():
         window=Window(service)
         try:
             window.resize(1024,700);window.show();app.processEvents()
-            scroll=window.stack.currentWidget();assert window.width()==1024 and window.height()==700 and scroll.horizontalScrollBar().maximum()==0
+            page=window.stack.currentWidget();assert window.width()==1024 and window.height()==700 and window.inspector_scroll.horizontalScrollBar().maximum()==0
             for control in (window.advanced_search_button,window.saved_searches,window.save_search_button,window.update_search_button,window.delete_search_button):
-                assert control.mapTo(scroll.viewport(),control.rect().topRight()).x()<scroll.viewport().width()
+                assert control.mapTo(page,control.rect().topRight()).x()<page.width()
             all_query={'match':'all','conditions':[condition('title','contains','Local'),condition('year','after','2023')]}
             apply(window,all_query);assert titles(window)=={'Local Alpha'}
             any_query={'match':'any','conditions':[condition('title','is','Local Beta'),condition('year','after','2024')]}
@@ -51,7 +51,7 @@ def main():
             assert window.advanced_query==any_query and titles(window)=={'Local Beta','Gamma'}
             with patch.object(QInputDialog,'getText',return_value=('保存搜索名称很长仍应在窄窗口内完整保留规则 '+ 'Local metadata '*5,True)):window.save_new_search()
             saved_id=window.saved_searches.currentData();assert saved_id and len(service.list_saved_searches())==1
-            app.processEvents();assert scroll.horizontalScrollBar().maximum()==0 and window.width()==1024
+            app.processEvents();assert window.inspector_scroll.horizontalScrollBar().maximum()==0 and window.width()==1024
             window.refresh();assert window.saved_searches.currentData()==saved_id and window.advanced_query==any_query
             # Existing quick/collection/tag restrictions intersect the advanced rules.
             window.search.setText('Beta');assert titles(window)=={'Local Beta'};window.search.clear()

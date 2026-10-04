@@ -59,7 +59,7 @@ class ScoringIntegrationTests(unittest.TestCase):
         item = self.store.create_bibliographic_item({'title': 'New bibliography'})
         self.assertIsNone(item['sha256'])
         with self.store.connection() as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 13)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 15)
             self.assertFalse(db.execute('PRAGMA foreign_key_check').fetchall())
 
     def test_branch_schema_repair_keeps_exact_quote_and_model_provenance(self):

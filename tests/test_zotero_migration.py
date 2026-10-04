@@ -329,7 +329,7 @@ class ZoteroMigrationTests(unittest.TestCase):
         self.service=LocalService(self.root/'local')
         with self.service.store.connection() as db:
             self.assertEqual(db.execute('PRAGMA foreign_keys').fetchone()[0],1)
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],13)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],15)
 
     def test_source_changes_during_copy_and_unsafe_path_are_explicit(self):
         real=ZoteroSnapshotReader.manifest

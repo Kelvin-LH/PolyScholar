@@ -82,6 +82,8 @@ def main():
                 identifier=dialog.created['id']
                 created.append(identifier)
                 select_root(window,identifier)
+                window.resources_section.set_expanded(True)
+                app.processEvents()
                 assert window.item_type.currentData()==kind and window.attachment_list.count()==0 and window.attachment_empty.isVisible()
                 assert not window.read_button.isEnabled() and window.task_doc.count()==0 and not window.create_translation_button.isEnabled()
                 assert window.evidence_doc.count()==0 and not window.parse_button.isEnabled() and not window.generate_summary_button.isEnabled()
@@ -197,7 +199,7 @@ def main():
             window.open_original()
             idle(window)
             assert window.reader_document['id']==legacy['id']
-            assert window.width()==1024 and window.stack.widget(0).horizontalScrollBar().maximum()==0
+            assert window.width()==1024 and window.inspector_scroll.horizontalScrollBar().maximum()==0
             # Close still waits for the managed create worker and preserves the committed item.
             window.new_bibliographic()
             pending=window.bibliographic_dialog

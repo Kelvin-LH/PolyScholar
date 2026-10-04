@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from polyscholar import mcp_server
 from polyscholar.service import LocalService
+from verification_fixtures import research_report
 
 class McpServerTests(unittest.TestCase):
     def setUp(self):
@@ -68,6 +69,40 @@ class McpServerTests(unittest.TestCase):
             result = mcp_server.cli_run('show %s --json' % document_id)
         self.assertIn('exit=0', result)
         self.assertIn('"paper"', result)  # scores block present
+
+    def test_external_reports_cross_real_cli_process_boundary(self):
+        document_id = self.seed()
+        service = LocalService(self.data)
+        try:
+            source = self.root / 'research.json'
+            source.write_text(json.dumps(research_report(service.document(document_id)['sha256'])), encoding='utf-8')
+        finally:
+            service.close()
+        with patch.dict(os.environ, {'POLYSCHOLAR_DATA_DIR': str(self.data)}):
+            result = mcp_server.cli_run(f'verify import-research {document_id} --file "{source.as_posix()}" --json')
+            self.assertIn('exit=0', result)
+            self.assertIn('"reported"', result)
+            self.assertIn('exit=0', mcp_server.cli_run(f'verify list {document_id} --json'))
+            result = mcp_server.cli_run(f'verify github {document_id} --repo https://github.com/example/research --json')
+            self.assertIn('exit=1', result)
+            self.assertIn('命令未完成', result)  # The new bridge sanitizes arbitrary child stderr.
+
+    def test_cli_pipe_preserves_unicode_despite_inherited_encoding(self):
+        original_encoding = os.environ.get('PYTHONIOENCODING')
+        document_id = self.seed()
+        service = LocalService(self.data)
+        try:
+            service.update_document(document_id, {'title': '中文论文 · café 🧪'})
+        finally:
+            service.close()
+        with patch.dict(os.environ, {
+            'POLYSCHOLAR_DATA_DIR': str(self.data),
+            'PYTHONIOENCODING': 'ascii',
+        }):
+            result = mcp_server.cli_run('show %s --json' % document_id)
+        self.assertIn('exit=0', result)
+        self.assertIn('中文论文 · café 🧪', result)
+        self.assertEqual(os.environ.get('PYTHONIOENCODING'), original_encoding)
 
 if __name__ == '__main__':
     unittest.main()

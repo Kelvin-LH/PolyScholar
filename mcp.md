@@ -85,4 +85,6 @@ GUI 占用同一库时，`library_status` 返回 `lock: busy`，其余库命令�
 
 联网仅涉及配置模型 API、DOI 和公开 arXiv 资源等已允许用途。翻译可能产生 API 费用；MCP 不提供密钥读出命令。评阅来自 Agent，程序负责结构校验、聚合与保存，不判断科学结论真伪。
 
+公开 GitHub 核验分基础与深入。用户未指定时，当前 agent 先通过 `verify plan` 获取档位说明并询问用户；已明确选择则沿用授权。基础使用 `verify github`；深入通过 `begin-code --depth deep --yes` 固定论文/提交/预算，`code-tree` 定位，`read-code` 按行读取，`import-code --payload` 直接写回 JSON 报告，不要求客户端能创建宿主文件。应用不调度新 agent、不调用额外模型；窗口只显示报告。默认读取 12 个唯一文件、256 KiB，不能自动提高或另开任务绕过预算；token 总量由客户端控制。未返回的代码行不得引用为证据，报告不输出总分、不回写盲评分，完整契约见 [cli.md](cli.md)。只读模式拒绝开始深入任务、代码读取和报告写回，允许档位说明、目录和已存报告查询。
+
 桌面安装包的独立 stdio MCP 组件仍待验收；冻结桌面不能作为 `python -m` 命令宿主，当前明确返回 `unsupported_runtime`。源码与独立 CLI/MCP 的测试结果不等于桌面安装包验收。

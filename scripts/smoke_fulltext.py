@@ -79,7 +79,7 @@ def main():
             # Scope snapshots intersect metadata root filters while including child PDF text.
             dialog.close();window.search.setText('Scoped parent');window.open_fulltext();dialog=window.fulltext_dialog;wait(lambda:window.io_worker is None)
             dialog.query.setText('needle');dialog.search();wait(lambda:window.io_worker is None);assert dialog.coverage.count()==2 and dialog.results.count()==2
-            assert window.width()==1024 and window.stack.widget(0).horizontalScrollBar().maximum()==0
+            assert window.width()==1024 and window.inspector_scroll.horizontalScrollBar().maximum()==0
             # Closing the dialog during IO hides it without deleting callbacks or the managed worker.
             started=threading.Event();release=threading.Event();real=service.search_fulltext
             def delayed(*args,**kwargs):started.set();release.wait(5);return real(*args,**kwargs)

@@ -25,7 +25,7 @@ class ImportExportDialog(ManagedIODialog):
         layout.addWidget(imports)
         exports = QGroupBox('导出本机资料')
         exports_layout = QVBoxLayout(exports)
-        self.add_route(exports_layout, '引文与书目', '选择条目，导出 BibTeX、RIS 或 CSL-JSON。', lambda: window.nav.setCurrentRow(4))
+        self.add_route(exports_layout, '引文与书目', '选择条目，导出 BibTeX、RIS 或 CSL-JSON。', window.open_citations)
         self.add_route(exports_layout, '译文 PDF', '在翻译任务中选择实际译文产物并导出。', lambda: window.nav.setCurrentRow(2))
         self.add_route(exports_layout, '迁移档案文件', '通过本地收据选择受管文件并导出原始字节。', window.open_zotero_migration)
         layout.addWidget(exports)

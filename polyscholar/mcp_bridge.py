@@ -12,7 +12,7 @@ from integrations.engines import limited_environment
 from integrations.managed_process import ProcessCleanupError, run_captured
 
 COMMANDS = frozenset({'add', 'list', 'show', 'update', 'remove', 'text', 'parse',
-    'collection', 'translate', 'jobs', 'export-translation', 'score', 'rubric', 'status', 'search'})
+    'collection', 'translate', 'jobs', 'export-translation', 'score', 'rubric', 'status', 'search', 'verify'})
 MAX_ARGUMENTS = 128
 MAX_ARGUMENT_LENGTH = 8192
 MAX_ARGUMENT_BYTES = 32 * 1024
@@ -82,6 +82,11 @@ class CommandPolicy:
         command = argv[0]
         if command == 'translate' or (command == 'add' and any('--arxiv'.startswith(a.split('=', 1)[0]) for a in argv[1:] if a.startswith('--'))):
             return 'network'
+        if command == 'verify' and len(argv) > 1:
+            if argv[1] in {'github', 'begin-code', 'read-code'}:
+                return 'network'
+            if argv[1] in {'list', 'show', 'plan', 'code-status', 'code-tree'}:
+                return 'read'
         if command in {'list', 'show', 'text', 'jobs', 'rubric', 'status', 'search'}:
             return 'read'
         if command == 'collection' and len(argv) > 1 and argv[1] == 'list':
@@ -141,7 +146,7 @@ class CliBridge:
         environment['PYTHONIOENCODING'] = 'utf-8'
         environment['PYTHONUTF8'] = '1'
         for name in ('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy',
-                     'no_proxy', 'POLYSCHOLAR_RUBRICS_DIR', 'POLYSCHOLAR_CLI_MD'):
+                     'no_proxy', 'ALL_PROXY', 'all_proxy', 'POLYSCHOLAR_RUBRICS_DIR', 'POLYSCHOLAR_CLI_MD'):
             if name in os.environ:
                 environment[name] = os.environ[name]
         try:

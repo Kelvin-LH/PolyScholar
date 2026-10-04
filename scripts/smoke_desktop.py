@@ -98,7 +98,7 @@ def main():
             assert window.reader_result.currentData()==(job['id'],1)
             window.pages.setText('1-2')
             assert '1-2' in window.send_boundary.text() and '整篇 PDF' in window.send_boundary.text()
-            window.nav.setCurrentRow(5)
+            window.nav.setCurrentRow(window.nav.count()-1)
             window.cache.setText(str(root / 'custom-cache'))
             window.timeout.setValue(1200)
             window.key.setText('synthetic-session-key')

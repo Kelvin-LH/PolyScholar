@@ -99,7 +99,7 @@ class BibliographicTests(unittest.TestCase):
         item = self.service.create_bibliographic_item({'title':'New'})
         with self.store.connection() as db:
             self.assertEqual(db.execute('PRAGMA foreign_keys').fetchone()[0],1)
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],13)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],15)
             self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(),[])
             self.assertIsNone(db.execute('SELECT sha256 FROM desktop_documents WHERE id=?',(item['id'],)).fetchone()[0])
         preview = self.service.merge_preview([parent['id'],item['id']],parent['id'])

@@ -47,10 +47,14 @@ class McpDesignTests(unittest.TestCase):
     def test_read_only_rejects_network_writes_exports_and_aggregation(self):
         readonly = CliBridge(BridgeConfiguration(self.root, read_only=True))
         for argv in (['add', '--arxiv', '2312.04567'], ['translate', 'doc'], ['remove', 'doc', '--yes'],
-                     ['parse', 'doc'], ['export-translation', 'doc'], ['score', 'aggregate']):
+                     ['parse', 'doc'], ['export-translation', 'doc'], ['score', 'aggregate'],
+                     ['verify', 'github', 'doc', '--repo', 'https://github.com/example/research', '--yes'],
+                     ['verify', 'import-research', 'doc', '--file', 'report.json'],
+                     ['verify', 'export', 'doc', '--report', 'report', '--out', 'report.json']):
             self.assertEqual(readonly.execute(argv)['error_code'], 'read_only')
         with patch('polyscholar.mcp_bridge.run_captured', return_value=(b'[]', b'', 0, False)):
-            for argv in (['list', '--json'], ['collection', 'list'], ['score', 'validate'], ['rubric', 'list']):
+            for argv in (['list', '--json'], ['collection', 'list'], ['score', 'validate'], ['rubric', 'list'],
+                         ['verify', 'list', 'doc'], ['verify', 'show', 'doc', '--report', 'report']):
                 self.assertTrue(readonly.execute(argv)['success'])
 
     def test_error_contract_does_not_echo_provider_or_os_detail(self):

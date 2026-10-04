@@ -10,6 +10,9 @@ from PySide6.QtWidgets import QApplication, QScrollArea
 from PySide6.QtGui import QPdfWriter,QPainter
 from polyscholar.app import Window,STYLE
 from polyscholar.service import LocalService
+from polyscholar.ui.verification import VerificationDialog
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests'))
+from verification_fixtures import github_report, research_report
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -33,11 +36,12 @@ def main():
             window.show();app.processEvents();window.document_list.setCurrentRow(0)
             app.processEvents();window.grab().save(str(args.output/'library-python.png'))
             window.attachment_list.setCurrentRow(1)
+            window.resources_section.set_expanded(True)
             attachment_scroll=window.attachment_list.parentWidget()
             while attachment_scroll and not isinstance(attachment_scroll,QScrollArea):attachment_scroll=attachment_scroll.parentWidget()
             if attachment_scroll:attachment_scroll.ensureWidgetVisible(window.attachment_delete_button)
             app.processEvents();window.grab().save(str(args.output/'attachments-python.png'))
-            window.nav.setCurrentRow(5);app.processEvents();window.grab().save(str(args.output/'settings-python.png'))
+            window.nav.setCurrentRow(window.nav.count()-1);app.processEvents();window.grab().save(str(args.output/'settings-python.png'))
             service.parse_document(doc['id'])
             block=service.document_blocks(doc['id'])[0]
             service.save_claim(doc['id'],'合成 PDF 的本地证据笔记。',[{'blockId':block['id'],'quote':block['text']}])
@@ -45,6 +49,14 @@ def main():
             window.evidence_blocks.item(0).setCheckState(Qt.CheckState.Checked)
             window.evidence_claims.setCurrentRow(0);app.processEvents();window.grab().save(str(args.output/'evidence-python.png'))
             window.resize(1024,700);window.nav.setCurrentRow(0);app.processEvents();window.grab().save(str(args.output/'library-1024.png'))
+            target=window.selected()
+            receipts=[service.store.save_verification(target['id'],report,target['sha256'])
+                      for report in (github_report(),research_report(target['sha256']))]
+            dialog=VerificationDialog(window,target);dialog.show()
+            for receipt,name in zip(receipts,('github','research')):
+                dialog.refresh(receipt['id']);app.processEvents()
+                dialog.grab().save(str(args.output/f'verification-{name}-python.png'))
+            dialog.close()
         finally:
             window.close();service.close()
     print('Native screenshots saved:',args.output)

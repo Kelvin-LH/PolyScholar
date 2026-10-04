@@ -875,6 +875,65 @@ def cmd_score(service, args):
     return 0
 
 # ---------------------------------------------------------------- 解析器
+def cmd_verify(service, args):
+    if args.depth is not None and args.action != 'begin-code':
+        raise ValueError('--depth 仅用于 begin-code；基础核验使用 github，不自动升级。')
+    document = resolve_document(service, args.document)
+    identifier = document['id']
+    if args.action == 'github':
+        result = service.verify_github(identifier, args.repo, authorized=args.yes)
+        _print(result, args)
+        if result['status'] == 'unavailable':
+            return 3
+    elif args.action == 'plan':
+        _print(service.code_review_plan(identifier), args)
+    elif args.action == 'begin-code':
+        if not args.report:
+            raise ValueError('begin-code 需要 --report 指定已归档 GitHub 快照。')
+        _print(service.begin_code_review(identifier, args.report, depth=args.depth, authorized=args.yes,
+                                         max_files=args.max_files, max_bytes=args.max_bytes,
+                                         scope=args.scope), args)
+    elif args.action in ('code-status', 'code-tree', 'read-code'):
+        if not args.session:
+            raise ValueError('代码核验操作需要 --session 指定已确认任务。')
+        if args.action == 'code-status':
+            result = service.code_review_status(identifier, args.session)
+        elif args.action == 'code-tree':
+            result = service.code_review_tree(identifier, args.session, args.prefix, args.offset, args.limit)
+        else:
+            if not args.path:
+                raise ValueError('read-code 需要 --path 指定目录中的文件。')
+            result = service.read_code(identifier, args.session, args.path, args.start_line, args.end_line)
+        _print(result, args)
+    elif args.action == 'import-code':
+        if args.payload is not None:
+            if args.file:
+                raise ValueError('import-code 只能提供 --payload 或 --file 之一。')
+            try:
+                payload = json.loads(args.payload)
+            except (ValueError, TypeError):
+                raise ValueError('--payload 必须为有效的深入核验 JSON。') from None
+            result = service.submit_code_review(identifier, payload)
+        else:
+            result = service.import_code_review(identifier, args.file)
+        _print(result, args)
+    elif args.action == 'import-research':
+        _print(service.import_research_report(identifier, args.file), args)
+    elif args.action == 'list':
+        _print(service.list_verifications(identifier), args)
+    elif args.action in ('show', 'export'):
+        if not args.report:
+            raise ValueError('show/export 需要 --report 指定该文献的报告 ID。')
+        if args.action == 'show':
+            _print(service.verification_report(identifier, args.report), args)
+        else:
+            if not args.out:
+                raise ValueError('export 需要 --out 指定本地目标文件。')
+            service.export_verification(identifier, args.report, args.out)
+            _print({'id': args.report, 'exported': True}, args)
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog='polyscholar-cli',
         description='PolyScholar 命令行:文献库、翻译与 AI 评分的程序化入口。命令详情见 cli.md。')
@@ -975,6 +1034,29 @@ def build_parser():
 
     p = sub.add_parser('status', help='库状态:锁占用、文献/评分/任务计数(不取锁)', parents=[common])
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser('verify', help='独立外部核验，绝不修改盲评分', parents=[common])
+    p.add_argument('action', choices=['github', 'import-research', 'list', 'show', 'export',
+                                    'plan', 'begin-code', 'code-status', 'code-tree', 'read-code', 'import-code'])
+    p.add_argument('document')
+    p.add_argument('--repo', help='GitHub HTTPS 仓库根 URL；只向 GitHub 发送仓库标识')
+    p.add_argument('--yes', action='store_true', help='用户已确认本次基础/深入核验；agent 不得自行替用户授权')
+    p.add_argument('--file', help='import-research:已由 agent 整理的来源/时间/比较条件 JSON')
+    p.add_argument('--payload', help='import-code:直接提交 JSON，不需要宿主文件访问；也可用 --file')
+    p.add_argument('--report', help='show/export:报告 ID')
+    p.add_argument('--out', help='export:本地 JSON 目标')
+    p.add_argument('--depth', choices=['basic', 'deep'], help='begin-code 必须明确为 deep；基础使用 github')
+    p.add_argument('--session', help='深入核验任务 ID')
+    p.add_argument('--scope', default='论文核心方法、训练配置与评测流程', help='用户确认的检查范围')
+    p.add_argument('--max-files', type=int, default=12, help='深入核验最多读取文件数，默认 12，上限 32')
+    p.add_argument('--max-bytes', type=int, default=262144, help='累计唯一文件字节预算，默认 256 KiB，上限 512 KiB')
+    p.add_argument('--prefix', default='', help='code-tree:目录路径前缀')
+    p.add_argument('--offset', type=int, default=0)
+    p.add_argument('--limit', type=int, default=50)
+    p.add_argument('--path', help='read-code:固定快照内的文件路径')
+    p.add_argument('--start-line', type=int, default=1)
+    p.add_argument('--end-line', type=int, default=80)
+    p.set_defaults(func=cmd_verify)
     return parser
 
 

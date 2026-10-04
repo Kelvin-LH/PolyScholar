@@ -191,7 +191,8 @@ def main():
             reopened.close()
             window.open_import_export()
             QTest.mouseClick(window.import_export_dialog.actions[3], Qt.MouseButton.LeftButton)
-            assert window.nav.currentRow() == 4
+            assert window.citation_dialog.isVisible()
+            window.citation_dialog.close()
             window.open_import_export()
             QTest.mouseClick(window.import_export_dialog.actions[4], Qt.MouseButton.LeftButton)
             assert window.nav.currentRow() == 2

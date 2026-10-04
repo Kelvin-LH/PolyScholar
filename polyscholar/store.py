@@ -26,7 +26,12 @@ from .bibliographic import BibliographicPolicy
 from .migration_recovery import MigrationRecovery
 from .zotero_migration import ZoteroMigrationLibrary, MIGRATION_SCHEMA
 
-AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt','document_trashed','document_restored','purge_cleanup','documents_merged','bibliographic_created','primary_pdf_changed','citation_imported','zotero_migrated','score_updated','score_report_imported','job_deleted'})
+from .verification import VerificationLibrary, VERIFICATION_SCHEMA, verification_migration_sql
+from .code_review import CodeReviewLibrary, CODE_SCHEMA
+
+SCHEMA_VERSION = 15
+
+AUDIT_POINTS = frozenset({'document_imported','document_deleted','document_parsed','claim_created','collection_created','collection_updated','collection_deleted','collection_membership_updated','tag_renamed','tag_removed','translation_finished','artifact_exported','citation_exported','diagnostics_exported','saved_search_created','saved_search_updated','saved_search_deleted','fulltext_index_cleared','fulltext_index_rebuilt','document_trashed','document_restored','purge_cleanup','documents_merged','bibliographic_created','primary_pdf_changed','citation_imported','zotero_migrated','score_updated','score_report_imported','job_deleted','external_verification_saved','external_verification_exported'})
 
 MAX_PDF = 100 * 1024 * 1024
 SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeldoc',
@@ -35,7 +40,7 @@ SETTINGS = dict(endpoint='https://api.deepseek.com/v1', model='', engine='babeld
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
 
-class LocalStore(ScoringLibrary, ZoteroMigrationLibrary, DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLibrary, AttachmentLibrary):
+class LocalStore(CodeReviewLibrary, VerificationLibrary, ScoringLibrary, ZoteroMigrationLibrary, DuplicateLibrary, TrashLibrary, FulltextLibrary, SearchLibrary, CollectionLibrary, DocumentIRLibrary, AttachmentLibrary):
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -63,7 +68,7 @@ class LocalStore(ScoringLibrary, ZoteroMigrationLibrary, DuplicateLibrary, Trash
         self.objects.mkdir(exist_ok=True)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version > 13:
+            if version > SCHEMA_VERSION:
                 raise ValueError('本地数据库来自更新版本，请升级应用。')
             if version == 1:
                 backup = self.root / 'library-before-v2.sqlite3'
@@ -185,6 +190,26 @@ class LocalStore(ScoringLibrary, ZoteroMigrationLibrary, DuplicateLibrary, Trash
                         target.close()
                     if os.name == 'posix':
                         backup.chmod(0o600)
+            if 0 < version < 14:
+                backup = self.root / 'library-before-v14.sqlite3'
+                if not backup.exists():
+                    target = sqlite3.connect(backup)
+                    try:
+                        db.backup(target)
+                    finally:
+                        target.close()
+                    if os.name == 'posix':
+                        backup.chmod(0o600)
+            if 0 < version < SCHEMA_VERSION:
+                backup = self.root / 'library-before-v15.sqlite3'
+                if not backup.exists():
+                    target = sqlite3.connect(backup)
+                    try:
+                        db.backup(target)
+                    finally:
+                        target.close()
+                    if os.name == 'posix':
+                        backup.chmod(0o600)
             db.execute('PRAGMA journal_mode=WAL')
             db.execute('PRAGMA foreign_keys=OFF')
             db.execute('PRAGMA legacy_alter_table=ON')
@@ -196,6 +221,7 @@ class LocalStore(ScoringLibrary, ZoteroMigrationLibrary, DuplicateLibrary, Trash
             if version in range(1, 11) or pdf_only:
                 migration = self._fileless_migration_sql(db)
             migration += self.scoring_migration_sql(db)
+            migration += verification_migration_sql(db)
             foundation = '''
                 CREATE TABLE IF NOT EXISTS desktop_documents(id TEXT PRIMARY KEY, sha256 TEXT, data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS desktop_settings(id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
@@ -209,7 +235,7 @@ class LocalStore(ScoringLibrary, ZoteroMigrationLibrary, DuplicateLibrary, Trash
                     PRIMARY KEY(document_id,collection_id));
                 CREATE INDEX IF NOT EXISTS desktop_memberships_collection ON desktop_memberships(collection_id);
             '''
-            db.executescript('BEGIN IMMEDIATE;\n' + foundation + migration + '\n' + IR_SCHEMA + '\n' + ATTACHMENT_SCHEMA + '\n' + SEARCH_SCHEMA + '\n' + FULLTEXT_SCHEMA + '\n' + TRASH_SCHEMA + '\n' + MERGE_SCHEMA + '\n' + MIGRATION_SCHEMA + '\n' + SCORE_SCHEMA)
+            db.executescript('BEGIN IMMEDIATE;\n' + foundation + migration + '\n' + IR_SCHEMA + '\n' + ATTACHMENT_SCHEMA + '\n' + SEARCH_SCHEMA + '\n' + FULLTEXT_SCHEMA + '\n' + TRASH_SCHEMA + '\n' + MERGE_SCHEMA + '\n' + MIGRATION_SCHEMA + '\n' + SCORE_SCHEMA + '\n' + VERIFICATION_SCHEMA + '\n' + CODE_SCHEMA)
             if version < 8:
                 for row in db.execute('SELECT document_id FROM desktop_ir_current').fetchall():
                     index_current_ir(db, row[0])
@@ -221,7 +247,7 @@ class LocalStore(ScoringLibrary, ZoteroMigrationLibrary, DuplicateLibrary, Trash
                            "BEGIN SELECT RAISE(ABORT, 'Invalid audit event'); END")
             if db.execute('PRAGMA foreign_key_check').fetchone():
                 raise ValueError('本地资料关系校验失败，升级未提交。')
-            db.execute('PRAGMA user_version=13')
+            db.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
             db.commit()
             db.execute('PRAGMA foreign_keys=ON')
             db.execute('PRAGMA legacy_alter_table=OFF')

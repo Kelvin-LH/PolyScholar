@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QItemSelectionModel
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, QListWidget, QLineEdit, QFileDialog, QMessageBox, QFormLayout, QTextEdit, QSplitter, QInputDialog, QTreeWidget, QTreeWidgetItem, QCheckBox, QAbstractItemView, QDialog, QDialogButtonBox, QComboBox, QScrollArea, QHeaderView, QTabWidget, QPlainTextEdit, QFrame)
+from .sections import DisclosureSection, ScoreCard
+from .verification import VerificationDialog
 from .workers import safe_error
 from .arxiv import ArxivImportDialog
 from .scores import ScoreDetailDialog, KIND_NAMES, score_text
@@ -65,14 +67,14 @@ class DocumentTree(QTreeWidget):
 
 class LibraryPage:
     def library(self):
-        l=self.page('文献库','整理本地文献、附件、笔记与 Agent 评阅记录。')
+        l=self.page('文献库','整理本地文献、附件、笔记与 Agent 评阅记录。',scroll=False)
         r=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('搜索标题、作者、DOI、标签');self.search.textChanged.connect(self.filter_docs);self.search.setAccessibleName('搜索文献')
         r.addWidget(self.search);self.new_bibliographic_button=self.button('新建书目',self.new_bibliographic);r.addWidget(self.new_bibliographic_button);self.import_button=self.button('导入 PDF',self.import_pdf,True);r.addWidget(self.import_button);self.arxiv_button=self.button('arXiv 导入',self.open_arxiv);r.addWidget(self.arxiv_button);l.addLayout(r)
         self.advanced_query={'match':'all','conditions':[]};self._saved_query_changed=False
         advanced=QHBoxLayout();self.advanced_search_button=self.button('高级元数据检索',self.edit_search);advanced.addWidget(self.advanced_search_button);self.saved_searches=QComboBox();self.saved_searches.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon);self.saved_searches.setMinimumContentsLength(8);self.saved_searches.addItem('未选择保存搜索',None);self.saved_searches.currentIndexChanged.connect(self.select_saved_search);advanced.addWidget(self.saved_searches,1);l.addLayout(advanced)
         search_actions=QHBoxLayout();self.save_search_button=self.button('保存新搜索',self.save_new_search);search_actions.addWidget(self.save_search_button)
         self.update_search_button=self.button('更新保存搜索',self.update_saved_search);search_actions.addWidget(self.update_search_button)
-        self.delete_search_button=self.button('删除搜索',self.delete_saved_search);search_actions.addWidget(self.delete_search_button);self.fulltext_button=self.button('本地全文检索',self.open_fulltext);search_actions.addWidget(self.fulltext_button);search_actions.addStretch();l.addLayout(search_actions)
+        self.delete_search_button=self.button('删除搜索',self.delete_saved_search);search_actions.addWidget(self.delete_search_button);self.fulltext_button=self.button('本地全文检索',self.open_fulltext);search_actions.addWidget(self.fulltext_button);self.citations_button=self.button('引用导出',self.open_citations);search_actions.addWidget(self.citations_button);l.addLayout(search_actions)
         self.search_scope=QLabel('');self.search_scope.setWordWrap(True);l.addWidget(self.search_scope);self.update_search_controls()
         self.io_status=QLabel('');self.io_status.setWordWrap(True);l.addWidget(self.io_status)
         split=QSplitter();split.setChildrenCollapsible(False);split.setHandleWidth(5)
@@ -102,21 +104,59 @@ class LibraryPage:
         self.document_tree = DocumentTree()
         self.document_list = self.document_tree
         self.document_tree.setAccessibleName('文献列表，可按标题或 Agent 评阅分数排序')
-        self.document_tree.setHeaderLabels(['标题', '论文评阅', '证据评阅'])
+        self.document_tree.setHeaderLabels(['标题', '论文分', '置信度'])
         self.document_tree.header().setStretchLastSection(False)
         self.document_tree.setRootIsDecorated(False)
         self.document_tree.setAllColumnsShowFocus(True)
         self.document_tree.setMinimumWidth(230)
+        self.document_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.document_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for column in (1, 2):
-            self.document_tree.header().setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+            self.document_tree.header().setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+            self.document_tree.setColumnWidth(column,54)
             self.document_tree.headerItem().setToolTip(column, '已保存的 Agent 报告评分，不代表科学结论真伪概率。')
         self.document_tree.setSortingEnabled(True)
         self.document_tree.sortItems(0, Qt.SortOrder.AscendingOrder)
         self.document_tree.currentRowChanged.connect(self.select_doc)
         self.document_tree.itemActivated.connect(lambda *_: self.open_original())
         split.addWidget(self.document_tree)
-        inspector=QWidget();inspector.setMinimumWidth(280);f=QFormLayout(inspector);self.metadata_form=f;self.fields={};self._metadata_creators=[];self._authors_loaded='';f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        inspector = QWidget()
+        inspector.setMinimumWidth(280)
+        inspector_layout = QVBoxLayout(inspector)
+        inspector_layout.setContentsMargins(0, 0, 0, 0)
+        self.inspector_title = QLabel('选择文献后查看 AI 结论。')
+        self.inspector_title.setTextFormat(Qt.TextFormat.PlainText)
+        self.inspector_title.setWordWrap(True)
+        inspector_layout.addWidget(self.inspector_title)
+        self._score_document_id = None
+        self.score_cards = {}
+        self.score_headers = {}
+        self.score_views = {}
+        for kind, name in (('paper', '论文分'), ('confidence', '文本内置信度'), ('summary', 'AI 提炼')):
+            card = ScoreCard(name, '暂无结果；通过 MCP agent 分析后写入。')
+            self.score_cards[kind] = card
+            self.score_headers[kind] = card.header
+            self.score_views[kind] = card.full_text
+            inspector_layout.addWidget(card)
+        self.score_status = QLabel('分数为 Agent 评阅记录，供阅读核查。')
+        self.score_status.setWordWrap(True)
+        inspector_layout.addWidget(self.score_status)
+        self.score_detail_button = self.button('评阅明细', self.open_score_detail)
+        inspector_layout.addWidget(self.score_detail_button)
+        self.verification_button = self.button('外部核验（独立报告）', self.open_verification)
+        inspector_layout.addWidget(self.verification_button)
+        self.read_button = self.button('阅读主要 PDF', self.open_original)
+        inspector_layout.addWidget(self.read_button)
+        self.metadata_section = DisclosureSection('书目、作者、摘要与笔记')
+        inspector_layout.addWidget(self.metadata_section)
+        metadata = QWidget()
+        self.metadata_section.content_layout.addWidget(metadata)
+        f = QFormLayout(metadata)
+        self.metadata_form = f
+        self.fields = {}
+        self._metadata_creators = []
+        self._authors_loaded = ''
+        f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         self.item_type=QComboBox()
         for value,label in ITEM_TYPE_LABELS.items():self.item_type.addItem(label,value)
         f.addRow('条目类型',self.item_type);self.item_type.currentIndexChanged.connect(self.update_metadata_fields)
@@ -137,33 +177,11 @@ class LibraryPage:
         self.abstract.setMaximumHeight(130)
         f.addRow('摘要', self.abstract)
         self.notes=QTextEdit();self.notes.setPlaceholderText('本地笔记');self.notes.setMaximumHeight(150);f.addRow('笔记',self.notes)
-        self.score_tabs = QTabWidget()
-        self.score_tabs.setAccessibleName('当前文献的 Agent 评阅')
-        self.score_headers = {}
-        self.score_views = {}
-        for kind, name in KIND_NAMES.items():
-            panel = QWidget()
-            panel_layout = QVBoxLayout(panel)
-            panel_layout.setContentsMargins(6, 8, 6, 8)
-            header = QLabel('尚无记录')
-            header.setWordWrap(True)
-            view = QPlainTextEdit()
-            view.setReadOnly(True)
-            view.setMaximumHeight(100)
-            view.setPlaceholderText('生成或导入 Agent 评阅记录后显示。')
-            view.setAccessibleName(name + '理由')
-            panel_layout.addWidget(header)
-            panel_layout.addWidget(view)
-            self.score_tabs.addTab(panel, name)
-            self.score_headers[kind] = header
-            self.score_views[kind] = view
-        f.addRow(self.score_tabs)
-        self.score_status = QLabel('分数为 Agent 评阅记录，供阅读核查。')
-        self.score_status.setTextFormat(Qt.TextFormat.PlainText)
-        self.score_status.setWordWrap(True)
-        f.addRow(self.score_status)
-        self.score_detail_button = self.button('评阅明细', self.open_score_detail)
-        search_actions.addWidget(self.score_detail_button)
+        f.addRow(self.button('保存条目',self.save_doc,True))
+        self.resources_section=DisclosureSection('所属集合与 PDF 附件')
+        inspector_layout.addWidget(self.resources_section)
+        resources=QWidget();self.resources_section.content_layout.addWidget(resources)
+        f=QFormLayout(resources);f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         self.membership_info=QLabel('');self.membership_info.setWordWrap(True);f.addRow('所属集合',self.membership_info);self.membership_add_button=self.button('加入集合',self.add_to_collection);self.membership_remove_button=self.button('移出当前集合',self.remove_from_collection);f.addRow(self.membership_add_button);f.addRow(self.membership_remove_button);
         self.attachment_list=QListWidget();self.attachment_list.setMaximumHeight(130);self.attachment_list.currentRowChanged.connect(self.update_attachment_controls);f.addRow('PDF 附件',self.attachment_list)
         self.attachment_empty=QLabel('尚无 PDF：添加后可阅读、解析与翻译 PDF。带 arXiv 链接的条目可使用 HTML 翻译。');self.attachment_empty.setWordWrap(True);self.attachment_empty.setMinimumHeight(100);f.addRow(self.attachment_empty)
@@ -171,8 +189,8 @@ class LibraryPage:
         self.attachment_add_button=self.button('添加 PDF 附件',self.add_attachment);self.attachment_read_button=self.button('阅读选中附件',self.read_attachment);self.attachment_delete_button=self.button('附件移至回收站',self.remove_attachment)
         self.primary_pdf_button=self.button('设为主要 PDF',self.set_primary_pdf);f.addRow(self.primary_pdf_button)
         f.addRow(self.attachment_add_button);f.addRow(self.attachment_read_button);f.addRow(self.attachment_delete_button)
-        f.addRow(self.button('保存条目',self.save_doc,True));self.read_button=self.button('阅读主要 PDF',self.open_original);f.addRow(self.read_button);f.addRow(self.button('移至回收站',self.delete_doc))
-        inspector_scroll=QScrollArea();inspector_scroll.setWidgetResizable(True);inspector_scroll.setWidget(inspector);inspector_scroll.setMinimumWidth(300)
+        inspector_layout.addWidget(self.button('移至回收站',self.delete_doc));inspector_layout.addStretch()
+        inspector_scroll=QScrollArea();self.inspector_scroll=inspector_scroll;inspector_scroll.setWidgetResizable(True);inspector_scroll.setWidget(inspector);inspector_scroll.setMinimumWidth(300)
         split.addWidget(inspector_scroll);split.setSizes([180,460,310]);split.setStretchFactor(1,1);l.addWidget(split,1)
         self.empty=QLabel('还没有文献，可新建书目或导入本地 PDF。');self.empty.setObjectName('muted');l.addWidget(self.empty)
 
@@ -192,6 +210,7 @@ class LibraryPage:
         self.collection_delete_button.setEnabled(collection is not None)
         self.include_children.setEnabled(collection is not None)
         current = self.selected()
+        selected_ids={item.data(0,Qt.ItemDataRole.UserRole)['id'] for item in self.document_tree.selectedItems()}
         matches = self.service.search_documents(
             text=self.search.text(), collection_id=collection,
             unfiled=self.collection_view() == '__unfiled__',
@@ -212,8 +231,9 @@ class LibraryPage:
             item.setData(1, Qt.ItemDataRole.UserRole, paper)
             item.setData(2, Qt.ItemDataRole.UserRole, confidence)
             tree.addTopLevelItem(item)
+            item.setSelected(document['id'] in selected_ids)
             if current and current['id'] == document['id']:
-                tree.setCurrentItem(item)
+                tree.setCurrentItem(item, 0, QItemSelectionModel.SelectionFlag.NoUpdate)
         tree.setSortingEnabled(True)
         tree.blockSignals(False)
         self.select_doc(tree.currentRow())
@@ -238,23 +258,24 @@ class LibraryPage:
         self.refresh_attachments()
 
     def update_score_views(self, document):
-        scores = {}
-        message = '分数为 Agent 评阅记录，供阅读核查。'
-        if document:
-            try:
-                scores = self.service.document_scores(document['id'])
-            except Exception as error:
-                message = safe_error(error)
-        for kind, name in KIND_NAMES.items():
-            entry = scores.get(kind) or {}
-            value = entry.get('score')
-            label = '已保存提炼记录' if kind == 'summary' and entry else '尚无记录'
-            if kind != 'summary' and entry:
-                label = '报告评分 ' + score_text(value) + ' / 100'
-            self.score_headers[kind].setText(label)
-            self.score_views[kind].setPlainText(entry.get('rationale') or '')
-        self.score_detail_button.setEnabled(bool(document))
-        self.score_status.setText(message)
+        """Preserve same-paper disclosure; reset when identity changes.
+
+        同篇刷新保留展开状态，切换文献收起旧内容；折叠不重建编辑草稿。
+        """
+        identifier = (document or {}).get('id')
+        reset = identifier != self._score_document_id
+        self._score_document_id = identifier
+        self.inspector_title.setText((document or {}).get('title') or '选择文献后查看 AI 结论。')
+        scores = self.service.document_scores(identifier) if identifier else {}
+        for kind, card in self.score_cards.items():
+            card.set_entry(scores.get(kind), reset=reset)
+        self.score_detail_button.setEnabled(any(scores.values()) and self.io_worker is None)
+        self.verification_button.setEnabled(bool(document) and self.io_worker is None)
+        self.metadata_section.setEnabled(bool(document))
+        self.resources_section.setEnabled(bool(document))
+        if reset:
+            self.metadata_section.set_expanded(False)
+            self.resources_section.set_expanded(False)
 
     def open_score_detail(self):
         document = self.selected()
@@ -613,7 +634,8 @@ class LibraryPage:
         self.import_export_button.setEnabled(not busy)
         self.update_read_controls()
         self.arxiv_button.setEnabled(not busy)
-        self.score_detail_button.setEnabled(bool(parent) and not busy)
+        self.score_detail_button.setEnabled(bool(parent) and any(self.service.document_scores(parent['id']).values()) and not busy)
+        self.verification_button.setEnabled(bool(parent) and not busy)
 
     def add_attachment(self):
         parent=self.selected()
@@ -631,3 +653,23 @@ class LibraryPage:
         row=self.selected_attachment()
         if row and row['role']!='original' and self.io_worker is None and not self._closing:
             self.move_to_trash(row['documentId'])
+
+    def open_verification(self):
+        document = self.selected()
+        if not document or self.io_worker is not None or self._closing:
+            return
+        document = self.guard(lambda: self.service.verification_document(document['id']))
+        if not document:
+            return
+        for dialog in self.findChildren(VerificationDialog):
+            if dialog.document_id == document['id']:
+                dialog._closed = False
+                dialog.timer.start()
+                dialog._poll_shared_io()
+                dialog.refresh()
+                dialog.show()
+                dialog.raise_()
+                dialog.activateWindow()
+                return
+        dialog = VerificationDialog(self, document)
+        dialog.show()

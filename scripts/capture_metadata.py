@@ -32,6 +32,7 @@ def main():
         window = Window(service)
         try:
             window.show(); window.document_list.setCurrentRow(0)
+            window.metadata_section.set_expanded(True)
             window.document_list.parentWidget().setSizes([210, 430, 450]); app.processEvents()
             window.grab().save(str(output / 'metadata-python.png'))
             dialog = CreatorsDialog(creators, window); dialog.show(); app.processEvents()

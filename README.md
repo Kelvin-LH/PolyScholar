@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/License-AGPL--3.0-blue)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/Kelvin-LH/PolyScholar?style=flat)](https://github.com/Kelvin-LH/PolyScholar/stargazers)
 
-[界面预览](#界面预览) · [快速开始](#快速开始) · [参与贡献](#参与贡献) · [许可](#致谢与许可)
+[界面预览](#界面预览) · [快速开始](#快速开始) · [更新说明](CHANGELOG.md) · [参与贡献](#参与贡献) · [许可](#致谢与许可)
 
 </div>
 
@@ -25,6 +25,7 @@
 - **双引擎翻译**：集成 [BabelDOC](https://github.com/funstory-ai/BabelDOC) 与 [PDFMathTranslate](https://github.com/PDFMathTranslate/PDFMathTranslate)，原文与译文分开保存。
 - **arXiv 工作流**：编号或链接导入，预览后下载；支持英文全文转中文 HTML 和译文导出。
 - **Agent 评阅**：CLI/MCP 读取量表、校验与聚合评阅、保存原始报告，桌面查看结构化明细。评分不代表科学结论真伪。[CLI →](cli.md) · [MCP →](mcp.md)
+- **独立外部核验**：基础核验公开 GitHub 的固定提交、目录线索与 README；通过 MCP 由当前 agent 确认基础/深入档位，在文件预算内对照论文与代码并写回报告；导入科研进展和基准对照报告。保留来源与未核验项，不改写论文分或文本内置信度。
 - **双语阅读**：原文与译文并排显示，在桌面内完成阅读。
 - **证据摘要**：勾选原文生成结构化模型摘要，保留引用与手写笔记，可跳转原文并提示旧引用失效。
 - **自选模型**：支持 DeepSeek 等兼容 API，自动获取可用模型，也可手动填写。
@@ -32,7 +33,9 @@
 - **Zotero 迁移**：选择本机资料目录，预览并迁移书目、集合与受管附件；未适配的字段、笔记和批注保留为本地档案。[迁移范围 →](docs/16-zotero-migration.md)
 - **个人桌面**：Python + PySide6 + SQLite，无需服务器或账户。发行包自带 Python，缓存目录可调整。
 
-文献与笔记保存在本机。联网用于模型 API、DOI 元数据查询、arXiv 导入及模型/字体下载；翻译时会向模型 API 发送论文内容。[数据边界 →](docs/09-local-and-network-scope.md)
+文献与笔记保存在本机。联网用于模型 API、DOI 元数据查询、arXiv 导入、模型/字体下载和用户触发的公开仓库核验；翻译时会向模型 API 发送论文内容，GitHub 核验只发送仓库标识。[数据边界 →](docs/09-local-and-network-scope.md)
+
+文献详情优先显示三类 AI 结论，理由默认两行，可展开完整原文；书目、笔记、集合和附件按需展开。“外部核验（独立报告）”支持历史查看与 JSON 导入导出。科研检索由外部 agent 执行，应用校验并归档其来源报告，不宣称自动确认全领域 SOTA，也不把仓库路径、stars 或 CI 当作科学可信度。实现范围见 [改进路线图](docs/16-roadmap.md)。
 
 ## 界面预览
 
