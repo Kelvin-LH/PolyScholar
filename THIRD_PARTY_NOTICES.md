@@ -12,6 +12,11 @@
 | PySide6 / Shiboken6 / Qt | 6.11.2 | [PySide6 对应源码](https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.11.2-src/)，本项目使用开源许可路径；LGPL-3.0/GPL-3.0 与各文件许可适用，许可副本见 licenses/desktop/ |
 | PyMuPDF / MuPDF | 1.28.2 | [对应源码与许可](https://github.com/pymupdf/PyMuPDF/tree/1.28.2)，采用 AGPL 开源许可；副本 licenses/desktop/PyMuPDF-1.28.2-COPYING.txt；本地文本解析，不调用 OCR 或模型 |
 | PyInstaller | 6.19.0 | [官方许可](https://pyinstaller.org/en/v6.19.0/license.html)，GPL-2.0 附打包例外，部分文件 Apache-2.0；副本 licenses/desktop/PyInstaller-6.19.0-COPYING.txt |
+| bibtexparser | 1.4.4 | [固定版本](https://pypi.org/project/bibtexparser/1.4.4/)，LGPLv3 或 BSD 双许可，本项目采用 BSD 路径；完整 COPYING 副本 licenses/desktop/bibtexparser-1.4.4-COPYING |
+| rispy | 0.10.0 | [固定版本](https://pypi.org/project/rispy/0.10.0/)，MIT；副本 licenses/desktop/rispy-0.10.0-LICENSE |
+| keyring | 25.6.0 | 系统凭据库适配，MIT；许可副本 licenses/desktop/keyring-25.6.0-LICENSE |
+| MCP Python SDK（可选 CLI/MCP） | 2.3.0 | MIT；许可副本 licenses/desktop/mcp-2.3.0-LICENSE，传递依赖另行验收 |
+| pyparsing | 3.3.2 | bibtexparser 的纯 Python 解析依赖，MIT；副本 licenses/desktop/pyparsing-3.3.2-LICENSE |
 
 本仓库包含原创 CLI 适配层、上游许可副本与版本要求，不将上游引擎源代码复制入原创目录。当前要求文件只固定顶层版本，不是完整哈希锁文件；所有传递依赖、模型和字体均需在发行包前完成 SBOM/许可/版本及来源校验。安装时依赖可能更新，所以不能将“顶层固定”宣传为可重复发行构建。
 

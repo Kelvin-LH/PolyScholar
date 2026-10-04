@@ -54,14 +54,16 @@ polyscholar-cli collection detach <doc> --collection <集合引用>
 ### 翻译
 
 ```
-polyscholar-cli translate <doc>          # arXiv 论文全文 → 双语 HTML(前台等待,进度输出到 stderr)
-polyscholar-cli translate <doc> --no-wait --json
+polyscholar-cli translate <doc>          # 默认使用设置中的 PDF 引擎，前台等待
+polyscholar-cli translate <doc> --engine html-llm  # arXiv 全文英文转中文 HTML
+polyscholar-cli translate <doc> --engine babeldoc
 polyscholar-cli jobs [--json]            # 任务列表
 polyscholar-cli export-translation <doc> [-o 输出.html]
 ```
 
-- 仅支持带 arXiv 链接的文献;总是全文(arXiv HTML 路线无页概念)。
-- 产物 `translated.html`:纯中文、保留图表与公式;进度逐段写入任务记录。
+- PDF 路线保留 BabelDOC/PDFMathTranslate；HTML 路线要求 arXiv 链接，按全文处理。
+- CLI 不支持脱离托管的后台翻译；`--no-wait` 在创建任务前拒绝。
+- 产物 `translated.html`:纯中文、保留图表与公式;通过受管工作进程生成，未翻译段落标记保留原文。
 - 译文归属于文献:同一文献的多次翻译,最新版在"打开译文"中生效。
 
 ### 提炼(AI 提炼维度:两个子代理)
@@ -169,3 +171,5 @@ polyscholar-cli translate <doc>
 ## MCP 接入
 
 本文件同时是 MCP server 的工具契约:`polyscholar-mcp`(stdio)只暴露两个工具——`cli_docs`(返回本文档全文)与 `cli_run(command)`(白名单执行上述命令)。安装与客户端配置见 [mcp.md](mcp.md)。agent 的推荐用法:`cli_docs` 学习命令 → `cli_run` 执行(输出加 --json)。
+
+评分为 Agent 评阅记录，不自动判定科学结论真伪。默认资料目录与桌面一致；不会启动时自动复制其他资料库。

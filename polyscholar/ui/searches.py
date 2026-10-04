@@ -6,9 +6,11 @@ Native metadata-condition editor; PDF contents are outside this search scope.
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QTableWidget, QLineEdit, QPushButton, QDialogButtonBox, QHeaderView)
 
-FIELDS=[('标题','title'),('作者 / 编者','creator'),('DOI','doi'),('年份','year'),('条目类型','itemType'),('期刊 / 论文集','publicationTitle'),('出版者','publisher'),('ISBN','isbn'),('标签','tag'),('笔记','notes')]
+from ..metadata import ITEM_TYPE_LABELS
+
+FIELDS=[('标题','title'),('作者 / 编者','creator'),('DOI','doi'),('URL','url'),('摘要','abstract'),('年份','year'),('条目类型','itemType'),('期刊 / 论文集','publicationTitle'),('出版者','publisher'),('ISBN','isbn'),('标签','tag'),('笔记','notes')]
 OPERATORS=[('包含','contains'),('不包含','not_contains'),('等于','is'),('不等于','is_not'),('为空','is_empty'),('非空','is_not_empty')]
-TYPES=[('期刊论文','article-journal'),('会议论文','paper-conference'),('图书','book'),('学位论文','thesis')]
+TYPES=[(label, value) for value, label in ITEM_TYPE_LABELS.items()]
 
 
 class SearchDialog(QDialog):

@@ -9,6 +9,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, build_opener
 
+from .summary_model import NoRedirect
+
 API_URL = 'https://export.arxiv.org/api/query'
 USER_AGENT = 'PolyScholar-local/0.1 (personal desktop research tool)'
 MAX_ENTRIES = 50
@@ -32,6 +34,8 @@ class NetworkError(ValueError):
     """连接 arXiv 失败;CLI 以独立退出码区分网络失败与一般输入错误。"""
 
 def normalize(identifier):
+    if not isinstance(identifier, str) or not _ID_PATTERN.fullmatch(identifier.strip()):
+        raise ValueError('arXiv 编号无效。')
     return re.sub(r'v[0-9]+$', '', identifier.strip())
 
 def parse_identifier(text):
@@ -40,7 +44,7 @@ def parse_identifier(text):
     value = text.strip()
     if not value or len(value) > 300:
         return None
-    match = re.search(r'(?:arxiv\.org|export\.arxiv\.org)/(?:abs|pdf|format)/(' + _ID_PATTERN.pattern + r')', value, re.IGNORECASE)
+    match = re.search(r'^(?:https?://)?(?:arxiv\.org|export\.arxiv\.org)/(?:abs|pdf|format)/(' + _ID_PATTERN.pattern + r')', value, re.IGNORECASE)
     if match:
         return normalize(match.group(1))
     if re.fullmatch(_NEW_ID, value, re.IGNORECASE):
@@ -64,6 +68,8 @@ def _validated_url(url, allow_query=False):
     parsed = urlsplit(url if isinstance(url, str) else '')
     local = parsed.hostname in ('localhost', '127.0.0.1', '::1')
     valid = parsed.hostname and (parsed.scheme == 'https' or (local and parsed.scheme == 'http'))
+    if not local and parsed.hostname not in ('arxiv.org', 'export.arxiv.org', 'ar5iv.labs.arxiv.org'):
+        raise ValueError('arXiv 地址必须来自官方来源。')
     if not valid or parsed.username or parsed.password or (not allow_query and (parsed.query or parsed.fragment)):
         raise ValueError('arXiv 地址无效。')
     return url
@@ -75,7 +81,7 @@ def _open(url, cap, timeout):
     _validated_url(url, allow_query=True)
     request = Request(url, headers={'User-Agent': USER_AGENT, 'Accept': '*/*'}, method='GET')
     try:
-        with build_opener().open(request, timeout=timeout) as response:
+        with build_opener(NoRedirect()).open(request, timeout=timeout) as response:
             return response.read(cap + 1)
     except HTTPError as error:
         raise NetworkError('arXiv 请求失败（HTTP %d）。' % error.code) from None
@@ -154,15 +160,17 @@ def import_batch(service, entries, collection_id=None, delay=1.0):
                     raise ValueError('作者信息无效。')
                 if index:
                     time.sleep(delay)
-                path = download_pdf(entry['pdf_url'], directory, entry['identifier'])
-                document = service.import_pdf(path)
+                # Validate before copying a PDF so rejected metadata leaves no partial import.
+                # 下载前校验元数据，避免失败时产生半完成文献。
+                from .bibliographic import BibliographicPolicy
+                from .metadata import normalize_metadata
                 creators = [dict(role='author', type='person', literal=name.strip(), family='', given='') for name in authors]
                 patch = dict(title=title.strip(), itemType='arxiv-preprint', creators=creators,
                              abstract=entry.get('abstract', ''), url=entry.get('url', ''), doi=entry.get('doi', ''),
                              year=entry.get('date', '')[:4], date=entry.get('date', ''))
-                service.update_document(document['id'], patch)
-                if collection_id:
-                    service.set_membership(document['id'], collection_id)
+                BibliographicPolicy.metadata_change(normalize_metadata({'title': title.strip(), 'authors': '', 'year': '', 'doi': ''}), patch)
+                path = download_pdf(entry['pdf_url'], directory, entry['identifier'])
+                document = service.import_enriched_pdf(path, patch, collection_id)
                 imported.append(dict(id=document['id'], title=title.strip()))
             except Exception as error:
                 errors.append(label + '：' + (str(error) if isinstance(error, ValueError) else '下载或导入失败。'))

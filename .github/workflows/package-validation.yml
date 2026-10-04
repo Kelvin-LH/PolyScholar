@@ -1,0 +1,68 @@
+name: Frozen desktop validation
+
+# Dispatch explicitly: embedded engines are rebuilt only for package acceptance.
+# 显式触发：仅在包验收时重建嵌入引擎，不跟随每次源码推送。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frozen-package:
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: .tools/package-validation/PolyScholar
+          - os: windows-latest
+            artifact: .tools/package-validation/PolyScholar
+          - os: macos-latest
+            artifact: .tools/package-validation/PolyScholar.app
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Inspect build disk space
+        run: python -c "import platform,shutil; print(platform.system(),platform.machine()); print(shutil.disk_usage('.'))"
+      - name: Install Linux Qt graphics runtime
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1
+      - name: Install desktop build dependencies
+        run: python -m pip install -e '.[build]'
+      - name: Prepare pinned embedded Python and isolated engines
+        run: python scripts/prepare_runtime.py --output .runtime
+      - name: Build and execute actual frozen application checks
+        run: python scripts/package_desktop.py --dist .tools/package-validation
+      - name: Verify Chinese and space path relocation
+        run: >-
+          python scripts/check_package_relocation.py
+          --artifact '${{ matrix.artifact }}'
+          --source-commit '${{ github.sha }}'
+          --evidence .tools/package-validation/relocation-evidence.json
+      - name: Record bounded acceptance evidence
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path('.tools/package-validation')
+          evidence = {
+              'package': json.loads((root / 'package-manifest.json').read_text()),
+              'relocation': json.loads((root / 'relocation-evidence.json').read_text()),
+          }
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write('Frozen components and bundled engine memory configuration checked with synthetic local data.\n\n')
+              summary.write('Clean-machine installation, real translation and real engine crash recovery remain unverified.\n\n')
+              summary.write('```json\n' + json.dumps(evidence, indent=2) + '\n```\n')
+          print(json.dumps(evidence, indent=2))
+          PY

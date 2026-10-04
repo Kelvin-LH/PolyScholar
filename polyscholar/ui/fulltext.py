@@ -3,20 +3,19 @@
 
 Local PDF full-text dialog sharing the desktop's managed IO lifetime.
 """
-from PySide6.QtCore import Qt, QTimer, QEvent
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QListWidget, QTextEdit, QSplitter, QMessageBox)
 
+from .managed_dialog import ManagedIODialog
 
-class FullTextDialog(QDialog):
+
+class FullTextDialog(ManagedIODialog):
     def __init__(self, window, criteria, scope):
         super().__init__(window)
-        self.window=window
         # 调用者提供打开时的范围快照，后续库筛选不改变本次检索。
         # The caller snapshots scope at opening; later library filters do not change it.
         self.criteria=criteria
-        self._closed=False
-        self._busy=False
         self._pending_block=None
         self.setWindowTitle('本地全文检索')
         self.resize(900,650)
@@ -63,11 +62,6 @@ class FullTextDialog(QDialog):
         self.clear_button.clicked.connect(self.clear_selected)
         controls.addWidget(self.clear_button)
         layout.addLayout(controls)
-        self.window.installEventFilter(self)
-        self.timer=QTimer(self)
-        self.timer.setInterval(100)
-        self.timer.timeout.connect(self.update_controls)
-        self.timer.start()
         self.update_controls()
 
     def update_controls(self,*args):
@@ -81,35 +75,7 @@ class FullTextDialog(QDialog):
         self.results.setEnabled(not busy)
         self.coverage.setEnabled(not busy)
 
-    def run(self, work, ready, message):
-        if self._closed or self.window._closing or self.window.io_worker is not None:
-            return
-        self._busy=True
-        self.status.setText(message)
-        self.update_controls()
-        def result(value):
-            # 隐藏后忽略结果，旧回调不会修改重新打开的对话框。
-            # Ignore late results after hiding; old callbacks cannot affect a reopened dialog.
-            if not self._closed:
-                ready(value)
-        # 主窗口拥有线程和服务关闭顺序，避免对话框启动第二套生命周期。
-        # The window owns threads and shutdown ordering; the dialog adds no parallel lifetime.
-        self.window.run_io(work,result,message)
-        worker=self.window.io_worker
-        if worker:
-            worker.failed.connect(self.failed,Qt.ConnectionType.QueuedConnection)
-            worker.finished.connect(self.io_finished,Qt.ConnectionType.QueuedConnection)
-        else:
-            self._busy=False
-            self.update_controls()
-
-    def failed(self,message):
-        if not self._closed:
-            self.status.setText(message)
-
-    def io_finished(self):
-        self._busy=False
-        self.update_controls()
+    def managed_finished(self):
         # Window 的 finished 槽先清空共享 worker，随后阅读器才可启动加载。
         # Window clears the shared worker first, allowing the reader to start its own IO.
         block=self._pending_block
@@ -227,16 +193,3 @@ class FullTextDialog(QDialog):
 
     def clear_selected(self):
         self.index_selected(True)
-
-    def eventFilter(self,watched,event):
-        if watched is self.window and event.type()==QEvent.Type.Close:
-            self.close()
-        return super().eventFilter(watched,event)
-
-    def closeEvent(self,event):
-        # 关闭仅隐藏，主窗口继续管理线程；保留对象供已排队回调安全结束。
-        # Closing hides the dialog; the window owns IO and queued callbacks can finish safely.
-        self._closed=True
-        self._pending_block=None
-        self.timer.stop()
-        event.accept()

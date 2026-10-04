@@ -9,6 +9,7 @@ from contextlib import contextmanager
 import sqlite3
 import time
 import json
+from .bibliographic import BibliographicPolicy
 from .validation import QUERY_TEXT_POLICY
 
 FULLTEXT_SCHEMA = '''
@@ -111,8 +112,9 @@ class FulltextLibrary:
             raise ValueError('文献标识无效。')
         with self.lock, self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
-            identifiers = [document_id] if document_id else [r[0] for r in db.execute('SELECT id FROM desktop_documents')]
+            identifiers = [document_id] if document_id else [r[0] for r in db.execute('SELECT id FROM desktop_documents') if self.is_active(r[0], db) and BibliographicPolicy.is_pdf(json.loads(db.execute('SELECT data FROM desktop_documents WHERE id=?',(r[0],)).fetchone()[0]))]
             for identifier in identifiers:
+                self.require_pdf(identifier, db)
                 if not db.execute('SELECT 1 FROM desktop_documents WHERE id=?',(identifier,)).fetchone():
                     raise ValueError('文献不存在。')
                 if rebuild:
@@ -134,6 +136,11 @@ class FulltextLibrary:
             roots=self.search_documents(text=metadata_text,collection_id=collection_id,unfiled=unfiled,tags=tags,include_descendants=include_descendants,query=query)
             _check_deadline(deadline)
             root_ids={doc['id'] for doc in roots}
+            if document_id is not None:
+                self.require_active(document_id)
+                selected = self.document(document_id)
+                owner = selected.get('parentDocumentId') or document_id
+                root_ids.intersection_update({owner})
             with self._fulltext_connection(deadline) as db:
                 db.execute('BEGIN')
                 coverage=[];family={};titles={}
@@ -146,20 +153,18 @@ class FulltextLibrary:
                 for identifier,raw,parent,revision,status,last_parse,error,blocks,pages,indexed in rows:
                     _check_deadline(deadline)
                     parent=parent or identifier
-                    if parent not in root_ids:continue
-                    doc=json.loads(raw);family[identifier]=parent;titles[identifier]=doc
+                    if parent not in root_ids or not self.is_active(identifier, db):continue
+                    # A scoped PDF excludes siblings before counting/limiting results.
+                    # 限定 PDF 时先排除同组附件，再统计和截断结果。
+                    if document_id is not None and selected.get('parentDocumentId') and identifier != document_id:continue
+                    doc=json.loads(raw)
+                    if not BibliographicPolicy.is_pdf(doc):continue
+                    family[identifier]=parent;titles[identifier]=doc
                     actual_status = status or ('unparsed' if not revision else 'cleared')
                     if not revision and last_parse=='failed':actual_status='parse_failed'
                     coverage.append(dict(documentId=identifier,parentDocumentId=parent,revisionId=revision,status=actual_status,
                         lastParseStatus=last_parse,lastError=error,previousCurrent=bool(revision and last_parse=='failed'),blockCount=blocks,
                         pageCount=pages,indexedBlockCount=indexed,title=doc['title'],filename=doc['filename']))
-                # Scope to one document family (paper + its attachments) so agents
-                # can grep a single paper instead of sweeping the whole library.
-                if document_id is not None:
-                    target = family.get(document_id)
-                    if target is None or target not in root_ids:
-                        raise ValueError('文献不存在或不在检索范围内。')
-                    root_ids = {target}
                 items=[];total=0
                 if needle and family:
                     db.execute('CREATE TEMP TABLE fulltext_scope(id TEXT PRIMARY KEY)')

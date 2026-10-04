@@ -1,203 +1,209 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Read-only viewer for the machine-readable score detail stored per document.
-
-只读渲染 desktop_scores.detail(rubric 第 6 章的汇总报告 JSON)。界面只展示
-已存储的字段:某段缺失就原样标注"未存储",不做任何推断、补齐或美化,
-导出按钮写出的也是未经改动的原始 JSON。
-"""
+"""Readable stored agent reviews / 可读的本地 Agent 评阅记录。"""
 from html import escape
 import json
-from pathlib import Path
+import math
 
-from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout,
-                               QMessageBox, QPushButton, QTextBrowser, QTabWidget, QVBoxLayout)
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QFileDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
+    QTabWidget, QTextBrowser, QVBoxLayout,
+)
+from .managed_dialog import ManagedIODialog
+from .workers import safe_error
 
-KIND_NAMES = {'paper': '论文评分', 'confidence': '置信度评分', 'summary': 'AI 提炼'}
-DIM_NAMES = {'novelty': '创新点', 'innovation_degree': '创新程度', 'effectiveness': '实际效果',
-             'rigor': '方法严谨性', 'clarity': '清晰度',
-             'evidence': '证据强度', 'consistency': '内部一致性',
-             'traceability': '来源可溯源性', 'plausibility': '结果合理性'}
-VERDICTS = ('高度可信', '较可信', '存疑', '明显存疑', '高度存疑')
-SUMMARY_SECTIONS = (('problem', '解决的问题'), ('method', '使用的方法'),
-                    ('results', '实验效果'), ('limitations', '不足与缺陷'))
+KIND_NAMES = {'paper': '论文评阅', 'confidence': '证据评阅', 'summary': 'Agent 提炼'}
+DIM_NAMES = {
+    'novelty': '创新点', 'innovation_degree': '创新程度', 'effectiveness': '实际效果',
+    'rigor': '方法严谨性', 'clarity': '表达清晰度', 'evidence': '证据支持',
+    'consistency': '内部一致性', 'traceability': '来源可追溯性', 'plausibility': '结果合理性',
+}
+SUMMARY_SECTIONS = (('problem', '研究问题'), ('method', '研究方法'),
+                    ('results', '报告结果'), ('limitations', '局限与不足'))
+
+
+def score_text(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return '—'
+    return f'{value:g}'
 
 
 def _text(value):
     return escape(str(value)).replace('\n', '<br>')
 
 
-def _dim_line(dim):
-    key = dim.get('key')
-    name = DIM_NAMES.get(key, key or '?')
-    max_score = dim.get('max')
-    bounds = ' / %s' % max_score if isinstance(max_score, (int, float)) else ''
-    line = '<b>%s</b>：%g%s' % (_text(name), dim.get('score', 0), bounds)
-    rationale = (dim.get('rationale') or '').strip()
-    if rationale:
-        line += '<br><span style="color:#5F6C65">%s</span>' % _text(rationale)
-    return '<p style="margin:2px 0">%s</p>' % line
-
-
 def _findings(items, label):
-    if not isinstance(items, list) or not items:
+    if not isinstance(items, list):
         return ''
     rows = []
     for item in items:
         if not isinstance(item, dict):
             continue
-        row = _text(item.get('point') or item.get('flag') or '')
-        severity = item.get('severity')
-        if severity is not None:
-            row += '（严重度 %s）' % _text(severity)
+        point = item.get('point') or item.get('flag') or item.get('text')
+        if not point:
+            continue
+        text = _text(point)
+        if item.get('severity') is not None:
+            text += '（报告严重度：' + _text(item['severity']) + '）'
         evidence = item.get('evidence')
         if isinstance(evidence, list):
             evidence = '；'.join(str(part) for part in evidence)
         if evidence:
-            row += '<br><span style="color:#5F6C65">证据：%s</span>' % _text(evidence)
-        rows.append('<li>%s</li>' % row)
-    if not rows:
-        return ''
-    return '<h3>%s</h3><ul>%s</ul>' % (label, ''.join(rows))
-
-
-def _summary_sections(detail):
-    """Render the two-agent extraction sections; items carry their agent tags."""
-    lines = []
-    for key, label in SUMMARY_SECTIONS:
-        items = detail.get(key)
-        if not isinstance(items, list) or not items:
-            continue
-        rows = []
-        for item in items:
-            if not isinstance(item, dict) or not str(item.get('text', '')).strip():
-                continue
-            row = _text(item['text'])
-            agents = item.get('agents')
-            if isinstance(agents, list) and agents:
-                row += ' <span style="color:#5F6C65">（%s）</span>' % _text('、'.join(str(a) for a in agents))
-            evidence = item.get('evidence')
-            if evidence:
-                row += '<br><span style="color:#5F6C65">出处：%s</span>' % _text(evidence)
-            rows.append('<li>%s</li>' % row)
-        if rows:
-            lines.append('<h3>%s</h3><ul>%s</ul>' % (label, ''.join(rows)))
-    return lines
+            text += '<br><span style="color:#52645f">出处：' + _text(evidence) + '</span>'
+        agents = item.get('agents')
+        if isinstance(agents, list) and agents:
+            text += '<br>记录来源：' + _text('、'.join(str(agent) for agent in agents))
+        rows.append('<li>' + text + '</li>')
+    return '<h3>' + _text(label) + '</h3><ul>' + ''.join(rows) + '</ul>' if rows else ''
 
 
 def _render_kind(kind, entry):
+    """Render only stored values; absent fields never become inferred zeroes.
+
+    只呈现已有记录；缺失的维度与分数不能补成零分或科学结论。
+    """
     detail = entry.get('detail') if isinstance(entry.get('detail'), dict) else {}
-    score = entry.get('score')
-    head = '<h2>%s' % _text(KIND_NAMES.get(kind, kind))
-    if score is not None:
-        head += '：%g / 100' % score
-    head += '</h2>'
-    lines = [head]
-    version = detail.get('rubric_version')
-    if version:
-        lines.append('<p>打分文档版本：%s</p>' % _text(version))
-    if kind == 'confidence' and detail.get('verdict') in VERDICTS:
-        lines.append('<p>结论档位：<b>%s</b></p>' % _text(detail['verdict']))
-    lines.append('<p>%s</p>' % _text((entry.get('rationale') or '').strip() or '（理由未存储）'))
+    lines = ['<h2>' + _text(KIND_NAMES.get(kind, kind)) + '</h2>']
+    if kind != 'summary':
+        lines.append('<p><b>报告评分：' + score_text(entry.get('score')) + ' / 100</b></p>')
+    lines.append('<p>' + _text(entry.get('rationale') or '尚未记录评阅理由。') + '</p>')
+    if detail.get('rubric_version'):
+        lines.append('<p>评阅规则版本：' + _text(detail['rubric_version']) + '</p>')
+    if detail.get('verdict'):
+        lines.append('<p>Agent 原始判断用语：' + _text(detail['verdict']) + '</p>')
     aggregation = detail.get('aggregation')
     if isinstance(aggregation, dict):
-        parts = ['汇总方式：中位数', '极差：%s' % aggregation.get('spread', '未存储')]
+        parts = []
+        if aggregation.get('method'):
+            parts.append('汇总方法：' + str(aggregation['method']))
+        if 'spread' in aggregation:
+            parts.append('报告分差：' + str(aggregation['spread']))
         if aggregation.get('rechecked'):
-            parts.append('已复核')
+            parts.append('记录标注已复核')
         if aggregation.get('unresolved_disagreement'):
-            parts.append('复核后分歧未消除')
-        lines.append('<p>%s</p>' % '；'.join(_text(part) for part in parts))
-        reason = aggregation.get('recheck_reason')
-        if reason:
-            lines.append('<p style="color:#5F6C65">复核原因：%s</p>' % _text(reason))
+            parts.append('仍有未解决分歧')
+        if parts:
+            lines.append('<p>' + _text('；'.join(parts)) + '</p>')
+        if aggregation.get('recheck_reason'):
+            lines.append('<p>复核原因：' + _text(aggregation['recheck_reason']) + '</p>')
     dimensions = detail.get('dimensions')
     if isinstance(dimensions, list) and dimensions:
-        lines.append('<h3>维度明细</h3>')
-        lines.extend(_dim_line(dim) for dim in dimensions if isinstance(dim, dict))
-    lines.extend(_summary_sections(detail))
-    lines.append(_findings(detail.get('strengths'), '优势（得分点）'))
-    lines.append(_findings(detail.get('weaknesses'), '劣势（失分点）'))
-    lines.append(_findings(detail.get('red_flags'), '红旗清单'))
-    table = detail.get('disagreement_table')
-    if isinstance(table, list) and table:
-        lines.append('<h3>复核分歧对照</h3><ul>%s</ul>' % ''.join(
-            '<li>%s</li>' % _text(item) for item in table))
-    subs = detail.get('sub_scores')
-    if isinstance(subs, list) and subs:
-        lines.append('<h3>三个子代理盲评原文</h3>')
-        for sub in subs:
-            if not isinstance(sub, dict):
+        lines.append('<h3>维度与理由</h3>')
+        for dimension in dimensions:
+            if not isinstance(dimension, dict):
                 continue
-            who = _text(sub.get('agent_id') or sub.get('agent') or '子代理')
-            model = sub.get('model')
-            total = sub.get('total')
-            lines.append('<p style="margin:4px 0"><b>%s</b>%s：%s</p>' % (
-                who, '（%s）' % _text(model) if model else '',
-                '总分 %s' % total if total is not None else '总分未存储'))
-            original = sub.get('original_output')
-            if isinstance(original, (dict, list)):
-                blob = json.dumps(original, ensure_ascii=False, indent=1)
-            elif original is not None:
-                blob = str(original)
-            else:
-                blob = ''
-            if blob:
-                lines.append('<pre style="background:#F6F8F6;font-size:8pt">%s</pre>' % _text(blob))
-    if not any(isinstance(detail, dict) and detail.get(key) for key in
-               ('dimensions', 'strengths', 'weaknesses', 'red_flags', 'sub_scores')):
-        lines.append('<p style="color:#9A5B13">该评分没有可展示的明细 JSON（仅分数与理由）。</p>')
+            key = str(dimension.get('key') or '')
+            name = DIM_NAMES.get(key, key or '未命名维度')
+            value = score_text(dimension.get('score'))
+            maximum = dimension.get('max')
+            bounds = ' / ' + score_text(maximum) if maximum is not None else ''
+            lines.append('<p><b>' + _text(name) + '：' + value + bounds + '</b><br>'
+                         + _text(dimension.get('rationale') or '该维度理由未记录。') + '</p>')
+    for key, label in SUMMARY_SECTIONS:
+        lines.append(_findings(detail.get(key), label))
+    for key, label in (('strengths', '支持理由'), ('weaknesses', '局限与失分理由'),
+                       ('red_flags', '待核查问题')):
+        lines.append(_findings(detail.get(key), label))
+    disagreement = detail.get('disagreement_table')
+    if isinstance(disagreement, list) and disagreement:
+        lines.append('<h3>分歧记录</h3><ul>' + ''.join('<li>' + _text(row) + '</li>' for row in disagreement) + '</ul>')
+    reports = detail.get('sub_scores')
+    if isinstance(reports, list) and reports:
+        lines.append('<h3>各 Agent 的评阅记录</h3>')
+        for report in reports:
+            if not isinstance(report, dict):
+                continue
+            name = report.get('agent_id') or report.get('agent') or '未命名 Agent'
+            model = ' · ' + str(report['model']) if report.get('model') else ''
+            lines.append('<p><b>' + _text(str(name) + model) + '</b> · 报告总分 '
+                         + score_text(report.get('total')) + '</p>')
+            original = report.get('original_output')
+            if isinstance(original, dict):
+                lines.append('<p>' + _text(original.get('rationale') or original.get('summary')
+                                          or '详细字段可在原始记录中查看。') + '</p>')
+                lines.append(_findings(original.get('strengths'), '支持理由'))
+                lines.append(_findings(original.get('weaknesses'), '局限'))
+            elif isinstance(original, str):
+                lines.append('<p>' + _text(original) + '</p>')
+    if not detail:
+        lines.append('<p>尚未保存结构化明细，可在生成评阅记录后查看维度、出处和分歧。</p>')
     return ''.join(lines)
 
 
-class ScoreDetailDialog(QDialog):
-    """One tab per score kind: switching to 置信度 is a click, not a long scroll.
-
-    Each tab renders the stored detail verbatim; export writes the same JSON out.
-    """
-
-    def __init__(self, title, scores, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle('评分明细 · ' + (title or ''))
-        self.setModal(True)
-        self.resize(760, 640)
+class ScoreDetailDialog(ManagedIODialog):
+    def __init__(self, window, document_id, title, scores):
+        super().__init__(window)
+        self.document_id = document_id
         self._scores = scores
+        self.setWindowTitle('Agent 评阅 · ' + (title or '未命名文献'))
+        self.resize(800, 680)
+        self.setMinimumSize(560, 440)
         layout = QVBoxLayout(self)
-        present = [(kind, entry) for kind, entry in scores.items() if entry]
-        if len(present) == 1:
+        heading = QLabel(title or '未命名文献')
+        heading.setTextFormat(Qt.TextFormat.PlainText)
+        heading.setWordWrap(True)
+        heading.setObjectName('heading')
+        layout.addWidget(heading)
+        hint = QLabel('评分与提炼来自已保存的 Agent 评阅记录，供阅读核查；分数不是科学结论真伪的概率。')
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.tabs = QTabWidget()
+        self.tabs.setAccessibleName('Agent 评阅类别')
+        present = [(kind, scores[kind]) for kind in KIND_NAMES if isinstance(scores.get(kind), dict)]
+        for kind, entry in present:
             browser = QTextBrowser()
             browser.setOpenExternalLinks(False)
-            browser.setHtml(_render_kind(*present[0]))
-            layout.addWidget(browser, 1)
+            browser.setOpenLinks(False)
+            browser.setAccessibleName(KIND_NAMES[kind] + '明细')
+            browser.setHtml(_render_kind(kind, entry))
+            self.tabs.addTab(browser, KIND_NAMES[kind])
+        if present:
+            raw = QPlainTextEdit()
+            raw.setReadOnly(True)
+            raw.setAccessibleName('原始评阅 JSON')
+            raw.setPlainText(json.dumps(scores, ensure_ascii=False, indent=2))
+            self.tabs.addTab(raw, '原始记录')
         else:
-            tabs = QTabWidget()
-            for kind, entry in present:
-                browser = QTextBrowser()
-                browser.setOpenExternalLinks(False)
-                browser.setHtml(_render_kind(kind, entry))
-                tabs.addTab(browser, KIND_NAMES.get(kind, kind))
-            layout.addWidget(tabs, 1)
+            empty = QLabel('这篇文献尚未保存 Agent 评阅记录。生成或导入记录后，可在此查看分数、理由与出处。')
+            empty.setWordWrap(True)
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.tabs.addTab(empty, '暂无记录')
+        layout.addWidget(self.tabs, 1)
+        self.status = QLabel('')
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
         row = QHBoxLayout()
-        export = QPushButton('导出明细 JSON…')
-        export.clicked.connect(self._export)
-        row.addWidget(export)
+        self.export_button = QPushButton('导出评阅记录 JSON…')
+        self.export_button.clicked.connect(self._export)
+        row.addWidget(self.export_button)
         row.addStretch()
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self.accept)
-        row.addWidget(buttons)
+        close = QPushButton('关闭')
+        close.clicked.connect(self.close)
+        row.addWidget(close)
         layout.addLayout(row)
+        self.update_controls()
+
+    def update_controls(self):
+        if hasattr(self, 'export_button'):
+            busy = self._busy or self.window.io_worker is not None or self.window._closing or self._closed
+            self.export_button.setEnabled(not busy and any(self._scores.values()))
 
     def _export(self):
-        kinds = [kind for kind, entry in self._scores.items() if entry]
-        name = '-'.join(kinds) or 'scores'
-        path, _ = QFileDialog.getSaveFileName(self, '导出评分明细 JSON',
-                                              str(Path.home() / (name + '-detail.json')),
-                                              'JSON (*.json)')
+        if self._busy or self.window.io_worker is not None or self.window._closing:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, '导出 Agent 评阅记录', 'agent-review.json', 'JSON (*.json)')
         if not path:
             return
-        try:
-            Path(path).write_text(json.dumps(self._scores, ensure_ascii=False, indent=2),
-                                  encoding='utf-8')
-        except OSError as error:
-            QMessageBox.warning(self, '导出失败', '写入失败：%s' % error)
-            return
-        QMessageBox.information(self, '已导出', '明细已写入:\n' + path)
+
+        def work():
+            try:
+                self.window.service.export_score_details(self.document_id, path)
+                return True, '评阅记录已导出。'
+            except Exception as error:
+                return False, safe_error(error)
+
+        self.run(work, lambda result: self.show_status(result[1]), '正在导出评阅记录…')
+
+    def reject(self):
+        self.close()

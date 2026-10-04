@@ -135,7 +135,7 @@ class SearchTests(unittest.TestCase):
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],6)
             self.assertEqual(db.execute('SELECT COUNT(*) FROM desktop_documents').fetchone()[0],3)
         self.service=LocalService(self.root/'data',self.root/'resources')
-        with self.service.store.connection() as db:self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],12)
+        with self.service.store.connection() as db:self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],13)
         self.assertEqual(self.service.list_saved_searches(),[])
         self.assertEqual(len(self.service.search_documents()),3)
 

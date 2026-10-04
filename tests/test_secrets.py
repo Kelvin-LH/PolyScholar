@@ -87,32 +87,18 @@ class FileSecretTests(unittest.TestCase):
         patcher = patch.object(secrets, '_key_file', lambda: self.base / '.polyscholar' / 'api_key')
         patcher.start();self.addCleanup(patcher.stop)
 
-    def test_file_roundtrip_and_clear(self):
+    def test_file_storage_is_rejected_without_writing(self):
+        with self.assertRaisesRegex(ValueError, '明文'):
+            secrets.store_secret_file('file-key')
+        self.assertFalse((self.base / '.polyscholar' / 'api_key').exists())
+
+    def test_legacy_file_is_not_activated_and_can_be_cleared(self):
+        path = self.base / '.polyscholar' / 'api_key'
+        path.parent.mkdir()
+        path.write_text('legacy-key')
         self.assertIsNone(secrets.load_secret_file())
-        secrets.store_secret_file('file-key')
-        self.assertEqual(secrets.load_secret_file(), 'file-key')
         secrets.clear_secret_file()
-        self.assertIsNone(secrets.load_secret_file())
-
-    def test_file_store_rejects_empty(self):
-        with self.assertRaises(ValueError):
-            secrets.store_secret_file('')
-
-    def test_service_falls_back_to_file_key(self):
-        service = LocalService(self.base / 'library')
-        self.addCleanup(service.close)
-        self.service_patch = patch.object(secrets, 'keyring', FakeKeyring())
-        self.service_patch.start();self.addCleanup(self.service_patch.stop)
-        service.store_api_key('file-key', mode='file')
-        self.assertEqual(service._effective_key(), 'file-key')
-        self.assertEqual(service.stored_key_location(), 'file')
-        service.clear_stored_api_key()
-        self.assertIsNone(service.stored_key_location())
-        # store_api_key also activates the session key; clearing storage must not
-        # silently invalidate the still-running session (see UI's two buttons).
-        self.assertEqual(service._effective_key(), 'file-key')
-        service.set_session_key('')
-        self.assertEqual(service._effective_key(), '')
+        self.assertFalse(path.exists())
 
 if __name__ == '__main__':
     unittest.main()

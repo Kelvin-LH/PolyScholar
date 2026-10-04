@@ -1,84 +1,161 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""arXiv import dialog: paste links, preview fetched metadata, import checked entries."""
+"""Native arXiv import with shared worker ownership / 原生 arXiv 导入共用工作线程。"""
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                               QListWidget, QListWidgetItem, QPlainTextEdit, QMessageBox)
-from .workers import IOWorker
+from PySide6.QtWidgets import (
+    QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPlainTextEdit,
+    QPushButton, QVBoxLayout,
+)
+from .managed_dialog import ManagedIODialog
+from .workers import safe_error
 
-class ArxivImportDialog(QDialog):
+
+class ArxivImportDialog(ManagedIODialog):
     def __init__(self, window):
         super().__init__(window)
-        self.window_ref=window;self.entries=[];self.worker=None
-        self.setWindowTitle('arXiv 导入');self.resize(720,560)
-        layout=QVBoxLayout(self);layout.setSpacing(8)
-        hint=QLabel('每行一个 arXiv 链接或编号（如 https://arxiv.org/abs/2312.04567 或 2312.04567）。'
-                    '获取元数据与下载正文只向 arXiv 发送论文编号，不发送本机文献。')
-        hint.setObjectName('muted');hint.setWordWrap(True);layout.addWidget(hint)
-        self.input=QPlainTextEdit();self.input.setPlaceholderText('https://arxiv.org/abs/2312.04567\n2312.04567v2\ncs/0301012')
-        layout.addWidget(self.input,1)
-        fetch_row=QHBoxLayout();fetch_row.setSpacing(8)
-        self.fetch_button=QPushButton('获取元数据');self.fetch_button.clicked.connect(self.start_fetch);fetch_row.addWidget(self.fetch_button)
-        self.status=QLabel('');self.status.setObjectName('muted');self.status.setWordWrap(True);fetch_row.addWidget(self.status,1)
-        layout.addLayout(fetch_row)
-        self.preview=QListWidget();self.preview.setVisible(False);layout.addWidget(self.preview,2)
-        buttons=QHBoxLayout();buttons.setSpacing(8)
-        self.import_button=QPushButton('导入所选并下载正文');self.import_button.setObjectName('primary');self.import_button.setEnabled(False)
-        self.import_button.clicked.connect(self.start_import);buttons.addWidget(self.import_button,1)
-        self.cancel_button=QPushButton('关闭');self.cancel_button.clicked.connect(self.reject);buttons.addWidget(self.cancel_button)
-        layout.addLayout(buttons)
-
-    def _busy(self,working):
-        self.fetch_button.setEnabled(not working);self.import_button.setEnabled(not working and bool(self.entries))
-        self.input.setEnabled(not working);self.cancel_button.setEnabled(not working)
-
-    def start_fetch(self):
-        text=self.input.toPlainText().strip()
-        if not text:self.status.setText('请先粘贴 arXiv 链接或编号。');return
-        if self.worker is not None or self.window_ref._closing or self.window_ref.io_worker is not None:return
-        self.fetch_button.setEnabled(False);self.status.setText('正在向 arXiv 查询元数据…')
-        self.worker=IOWorker(lambda:self.window_ref.service.arxiv_lookup(text),self)
-        self.worker.ready.connect(self.fetched);self.worker.failed.connect(self.failed);self.worker.finished.connect(self.cleanup)
-        self.worker.start()
-
-    def fetched(self,entries):
-        self.entries=entries;self.preview.clear();self.preview.setVisible(True)
-        for entry in entries:
-            authors=('；'.join(entry['authors'][:4])+(' 等' if len(entry['authors'])>4 else '')) or '作者未知'
-            item=QListWidgetItem(f"{entry['title']}\n{authors} · {entry['date'] or '日期未知'} · {entry['identifier']}")
-            item.setFlags(item.flags()|Qt.ItemIsUserCheckable);item.setCheckState(Qt.CheckState.Checked)
-            item.setData(Qt.ItemDataRole.UserRole,entry);item.setToolTip(entry['abstract'][:800])
-            self.preview.addItem(item)
-        self.status.setText(f'获取到 {len(entries)} 篇，已全部勾选；取消勾选不需要的条目后导入。')
-        self.import_button.setEnabled(bool(entries))
-
-    def failed(self,message):
-        # Restore buttons so a transient network failure never dead-ends the dialog.
-        self._busy(False);self.status.setText(message)
-
-    def cleanup(self):
-        self.worker=None
-
-    def start_import(self):
-        checked=[item.data(Qt.ItemDataRole.UserRole) for item in self.preview_items()
-                 if item.checkState()==Qt.CheckState.Checked]
-        if not checked:self.status.setText('请先勾选要导入的条目。');return
-        if self.worker is not None or self.window_ref._closing or self.window_ref.io_worker is not None:return
-        self._busy(True);self.status.setText(f'正在下载 {len(checked)} 篇 PDF 并导入…')
-        collection=self.window_ref.current_collection()
-        self.worker=IOWorker(lambda:self.window_ref.service.arxiv_import(checked,collection),self)
-        self.worker.ready.connect(self.imported);self.worker.failed.connect(self.failed);self.worker.finished.connect(self.cleanup)
-        self.worker.start()
+        self.entries = []
+        self.collection_id = window.current_collection()
+        self.setWindowTitle('从 arXiv 导入')
+        self.resize(760, 640)
+        self.setMinimumSize(560, 460)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        hint = QLabel('粘贴论文编号或链接，先预览，再导入所选正文。只向 arXiv 发送编号与下载请求。')
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        label = QLabel('论文编号或链接（每行一条）')
+        self.input = QPlainTextEdit()
+        self.input.setAccessibleName('arXiv 论文编号或链接')
+        self.input.setPlaceholderText('2312.04567\nhttps://arxiv.org/abs/2312.04567v2\ncs/0301012')
+        self.input.setMaximumHeight(150)
+        label.setBuddy(self.input)
+        layout.addWidget(label)
+        layout.addWidget(self.input)
+        self.fetch_button = QPushButton('预览元数据')
+        self.fetch_button.setShortcut('Ctrl+Return')
+        self.fetch_button.clicked.connect(self.start_fetch)
+        layout.addWidget(self.fetch_button)
+        self.preview = QListWidget()
+        self.preview.setObjectName('panel')
+        self.preview.setAccessibleName('arXiv 预览条目，空格键切换是否导入')
+        self.preview.setWordWrap(True)
+        self.preview.itemChanged.connect(self.update_controls)
+        layout.addWidget(self.preview, 1)
+        self.status = QLabel('尚未查询。每次最多预览 50 篇，获取结果后可取消勾选不需要的条目。')
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.status.setWordWrap(True)
+        self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.status)
+        self.errors = QPlainTextEdit()
+        self.errors.setReadOnly(True)
+        self.errors.setAccessibleName('导入失败条目')
+        self.errors.setMaximumHeight(120)
+        self.errors.hide()
+        layout.addWidget(self.errors)
+        row = QHBoxLayout()
+        self.import_button = QPushButton('导入所选并下载 PDF')
+        self.import_button.setObjectName('primary')
+        self.import_button.clicked.connect(self.start_import)
+        row.addWidget(self.import_button)
+        row.addStretch()
+        self.cancel_button = QPushButton('关闭')
+        self.cancel_button.clicked.connect(self.close)
+        row.addWidget(self.cancel_button)
+        layout.addLayout(row)
+        self.update_controls()
 
     def preview_items(self):
         return [self.preview.item(index) for index in range(self.preview.count())]
 
-    def imported(self,result):
-        self._busy(False)
-        imported=result.get('imported',[]);errors=result.get('errors',[])
-        self.window_ref.refresh()
+    def checked_entries(self):
+        return [item.data(Qt.ItemDataRole.UserRole) for item in self.preview_items()
+                if item.checkState() == Qt.CheckState.Checked]
+
+    def update_controls(self, *_):
+        if not hasattr(self, 'import_button'):
+            return
+        busy = self._busy or self.window.io_worker is not None or self.window._closing or self._closed
+        self.input.setEnabled(not busy)
+        self.fetch_button.setEnabled(not busy)
+        self.preview.setEnabled(not busy)
+        self.import_button.setEnabled(not busy and bool(self.checked_entries()))
+        self.cancel_button.setText('关闭')
+
+    def run_inline(self, work, ready, message):
+        # Keep expected network failures inline; the main window still owns IO.
+        # 网络失败在当前页反馈，线程与关窗等待仍由主窗口统一管理。
+        def operation():
+            try:
+                return True, work()
+            except Exception as error:
+                return False, safe_error(error)
+
+        def completed(result):
+            succeeded, value = result
+            if succeeded:
+                ready(value)
+            else:
+                self.show_status(value)
+
+        self.run(operation, completed, message)
+
+    def start_fetch(self):
+        if self._busy or self.window.io_worker is not None or self.window._closing:
+            return
+        text = self.input.toPlainText().strip()
+        if not text:
+            self.show_status('请先粘贴至少一个 arXiv 编号或链接。')
+            self.input.setFocus()
+            return
+        # A failed refresh must not leave stale entries available for import.
+        # 新查询先清空旧预览，防止失败后误导入上一批条目。
+        self.entries = []
+        self.preview.clear()
+        self.errors.hide()
+        self.run_inline(lambda: self.window.service.arxiv_lookup(text), self.fetched,
+                        '正在查询 arXiv 元数据…')
+
+    def fetched(self, entries):
+        self.entries = entries
+        self.preview.clear()
+        for entry in entries:
+            authors = '；'.join(entry.get('authors', [])[:4]) or '作者未记录'
+            title = entry.get('title') or '标题未记录'
+            date = entry.get('date') or '日期未记录'
+            item = QListWidgetItem(f"{title}\n{authors} · {date} · {entry['identifier']}")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            item.setData(Qt.ItemDataRole.UserRole, entry)
+            item.setToolTip(entry.get('abstract', '')[:800])
+            self.preview.addItem(item)
+        self.show_status(f'找到 {len(entries)} 篇；勾选要导入的条目。'
+                         if entries else '没有找到匹配的论文。请检查编号后重试。')
+        self.update_controls()
+
+    def start_import(self):
+        checked = self.checked_entries()
+        if not checked:
+            self.show_status('请先勾选要导入的条目。')
+            return
+        self.errors.hide()
+        self.run_inline(
+            lambda: self.window.service.arxiv_import(checked, self.collection_id),
+            self.imported, f'正在下载并导入 {len(checked)} 篇 PDF…',
+        )
+
+    def imported(self, result):
+        imported = result.get('imported', [])
+        errors = result.get('errors', [])
+        self.window.refresh()
+        self.show_status(f'已导入 {len(imported)} 篇。'
+                         + (f'另有 {len(errors)} 篇未完成，可检查后重试。' if errors else '可关闭窗口继续整理。'))
+        self.errors.setPlainText('\n'.join(dict.fromkeys(errors)))
+        self.errors.setVisible(bool(errors))
         if not errors:
-            QMessageBox.information(self,'arXiv 导入完成',f'成功导入 {len(imported)} 篇。')
-            self.accept();return
-        summary=f'成功导入 {len(imported)} 篇，失败 {len(errors)} 篇：\n'+'\n'.join(dict.fromkeys(errors))
-        self.status.setText(f'成功 {len(imported)} 篇，失败 {len(errors)} 篇；可再次点击导入重试（已入库的条目会自动去重）。')
-        QMessageBox.warning(self,'arXiv 导入部分完成',summary)
+            for item in self.preview_items():
+                item.setCheckState(Qt.CheckState.Unchecked)
+        self.update_controls()
+
+    def reject(self):
+        # Escape and the title-bar close use the same managed lifecycle.
+        # Esc 与标题栏关闭共用生命周期，晚回调不再改动已关闭窗口。
+        self.close()

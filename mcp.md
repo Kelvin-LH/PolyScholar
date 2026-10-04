@@ -1,29 +1,56 @@
-# MCP 接入指南
+# MCP 接入
 
-PolyScholar 提供一个 **stdio MCP server**,让 Claude Desktop、Cursor 或任何支持 MCP 的 AI 客户端直接操作你的文献库:导入/arXiv 拉取论文、集合管理、触发翻译、读取全文、写入 AI 评分与提炼(内置证据摘要页已移除,要点分析由 agent 完成后写入提炼维度)。
+PolyScholar 通过 stdio 让 AI 客户端使用本机文献库。桌面与 MCP 复用同一 CLI、校验、事务及库锁，不引入 HTTP 服务、账户或云同步。
 
-## 设计:只暴露两个工具
+## 工具与资源
 
-server 是 `polyscholar-cli` 的薄壳,不含业务逻辑:
-
-| 工具 | 作用 |
+| 入口 | 用途 |
 |---|---|
-| `cli_docs` | 返回 [cli.md](cli.md) 全文——完整命令契约,agent 先读它学习用法 |
-| `cli_run` | 执行一条 polyscholar-cli 命令(白名单子命令、参数列表直传不经 shell、30 分钟超时、输出上限 100 KiB),返回退出码与输出 |
+| `library_status` | 查看配置库的占用状态、只读模式和下一步操作 |
+| `cli_execute(argv)` | 推荐入口：使用参数数组执行命令，支持空格、中文和 Windows 路径 |
+| `cli_docs` | 读取完整命令契约 |
+| `cli_run(command)` | 兼容旧客户端，按 POSIX 引号规则拆分字符串 |
+| `polyscholar://docs/cli` | Markdown 命令资源 |
+| `polyscholar://rubrics/paper` | 论文评阅规则 |
+| `polyscholar://rubrics/confidence` | 证据可靠性评阅规则 |
 
-软件用途写在 server 的 instructions 里,agent 连接即知。CLI 新增命令时本 server **零改动**。
+先调用 `library_status`，再读取命令契约。例如：
 
-## 安装
-
-```sh
-pip install "polyscholar[mcp]"
+```json
+{"argv": ["add", "D:\\研究资料\\paper one.pdf", "--json"]}
 ```
 
-即安装 `mcp==2.3.0`(官方 SDK,含传递依赖)。
+```json
+{"argv": ["show", "文献 ID", "--text", "--pages", "1-3", "--json"]}
+```
 
-## 配置示例
+`cli_execute` 返回稳定字段：
 
-Claude Desktop(`claude_desktop_config.json`)与多数客户端同型:
+```json
+{
+  "success": true,
+  "error_code": null,
+  "exit_code": 0,
+  "stdout": "[]\n",
+  "stderr": "",
+  "truncated": false,
+  "operation": "read"
+}
+```
+
+完整有效的 JSON 输出还会解析为 `data`，截断时不提供此字段。
+
+`operation` 为 `read`、`write` 或 `network`；联网命令也可能写入本地库。常见错误包括 `library_busy`、`read_only`、`library_override`、`timeout`、`command_failed` 和 `unsupported_runtime`。工具使用参数列表启动进程，无 shell；限制参数数量和长度、30 分钟总超时，以及每个输出流 100 KiB 的内存。截断时请缩小查询范围。
+
+## 安装与配置
+
+源码或独立 Python 环境安装：
+
+```sh
+python -m pip install -e ".[mcp]"
+```
+
+MCP 客户端配置：
 
 ```json
 {
@@ -31,43 +58,31 @@ Claude Desktop(`claude_desktop_config.json`)与多数客户端同型:
     "polyscholar": {
       "command": "polyscholar-mcp",
       "env": {
-        "POLYSCHOLAR_DATA_DIR": "D:\\path\\to\\PolyScholar\\data"
+        "POLYSCHOLAR_DATA_DIR": "D:\\研究资料\\PolyScholar"
       }
     }
   }
 }
 ```
 
-- `POLYSCHOLAR_DATA_DIR`(可选):指向资料目录。默认:源码运行为仓库 `data/`(便携),与 GUI 一致;冻结安装为系统应用目录。
-- `POLYSCHOLAR_CLI_MD`(可选):cli.md 的替代位置。
-- `POLYSCHOLAR_RUBRICS_DIR`(可选):打分文档(rubrics)目录的替代位置;默认按 cli.md→仓库→冻结包资源同链定位。
-- `HTTPS_PROXY`/`HTTP_PROXY`(可选):`add --arxiv` 的联网走标准代理环境变量;需要代理的机器在这里设置后重启客户端。
+省略 `POLYSCHOLAR_DATA_DIR` 时使用桌面的系统应用资料目录。库目录在连接启动时固定，工具不能通过 `--data-dir` 或其缩写切换文献库。
 
-Cursor 等(Chat 形式)同理:`command` = `polyscholar-mcp`(或 `python -m polyscholar.mcp_server`)。
+只读接入可增加：
 
-## 路径自动定位(无需手动配置)
+```json
+{"POLYSCHOLAR_MCP_READ_ONLY": "1"}
+```
 
-- **cli.md**:server 自动定位——环境变量 `POLYSCHOLAR_CLI_MD` > 源码仓库根 > 冻结包资源。
-- **数据目录**:CLI 子进程自动使用与 GUI 相同的目录(源码运行 = 仓库 `data/`;安装版 = 系统应用目录);需要指向别处时才设 `POLYSCHOLAR_DATA_DIR`。
-- 分发方式为 GitHub(克隆仓库或下载安装包):克隆运行自动使用仓库内 cli.md 与 data/;安装包自动携带 cli.md 并使用系统应用目录。不存在需要手动指定路径的常规场景。
+只读模式限制命令策略，允许检索、查看、读取规则及验证评阅报告；拒绝导入、解析、修改、导出、评阅写入、聚合和联网翻译。默认保留写入能力。CLI 启动仍可能初始化或迁移所选本地库；该模式不等于 SQLite 只读连接或操作系统文件沙箱。因此通用执行工具仍标注可能有本地副作用。
 
-## 单实例约束(重要)
+`POLYSCHOLAR_CLI_MD` 和 `POLYSCHOLAR_RUBRICS_DIR` 可指定公开契约文件位置。文档默认从源码、wheel 安装资源或桌面资源定位。arXiv 请求需要代理时，可设置 `HTTPS_PROXY`、`HTTP_PROXY`。
 
-GUI 与 MCP 共用同一资料目录的单实例锁:**GUI 开着时,MCP 的命令会失败**,错误信息为"此文献库已在运行"。当前版本请先关闭 GUI 再让 agent 操作;带后台调度服务的多进程并发是后续架构项。
+## 使用范围
 
-## 安全边界
+连接 stdio MCP 即允许客户端按命令能力访问所选本地库。普通模式可以读取文献正文、修改库、导入所选文件及导出到所选路径；命令白名单不是文件系统沙箱。客户端的工具确认与用户授权仍需由客户端执行，软件不自动替用户批准操作。
 
-- `cli_run` 只放行 cli.md 列出的子命令(add/list/show/update/remove/text/parse/collection/translate/jobs/export-translation/score/rubric/status/search);参数以列表直传,不经 shell。
-- `remove --yes` 会真实删除文献条目与受管副本(外部原文件保留);agent 调用前应向用户确认,或依赖 MCP 客户端的工具确认机制。
-- 没有遥测;所有操作写入本机审计日志。
+GUI 占用同一库时，`library_status` 返回 `lock: busy`，其余库命令返回 `library_busy`；请先关闭使用该库的桌面应用。进程超时时终止整棵进程树；无法确认清理完成时返回 `cleanup_failed`，不把清理失败误报为成功。
 
-## 评分工作流的工具支撑
+联网仅涉及配置模型 API、DOI 和公开 arXiv 资源等已允许用途。翻译可能产生 API 费用；MCP 不提供密钥读出命令。评阅来自 Agent，程序负责结构校验、聚合与保存，不判断科学结论真伪。
 
-- `rubric list` / `rubric show paper|confidence`:agent 直接经 MCP 获取打分文档全文、版本与 SHA-256(冻结材料包必需),不需要在文件系统里找 rubrics 目录。
-- `score validate`:写库前的结构校验(维度和=total、三个子代理、中位数一致、极差超限必须复核),失败逐条返回原因,退出码 1。
-- GUI"查看完整评分明细"渲染的就是 `score show --json` 里 `detail` 字段的完整内容;两个入口看到的永远一致。
-
-## 已知限制
-
-- 真实 LLM 翻译的费用由你的 API 密钥承担;`translate` 全文可能持续数分钟,建议 agent 用 `translate --no-wait` + `jobs` 轮询。
-- 评分/提炼的"智能"来自 agent 侧(读 `rubrics/` 打分文档后分析);程序只负责校验与存储。
+桌面安装包的独立 stdio MCP 组件仍待验收；冻结桌面不能作为 `python -m` 命令宿主，当前明确返回 `unsupported_runtime`。源码与独立 CLI/MCP 的测试结果不等于桌面安装包验收。

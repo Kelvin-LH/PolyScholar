@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Model API key storage: OS credential store or plain config file (agent-style).
+"""Explicit OS credential storage; never silently persist plaintext.
 
-提供两种持久化，均由用户在界面显式选择：OS 凭据库（加密，推荐）与明文配置文件
-（与常见 CLI agent 的 auth.json/token 文件一致）。明文文件受用户主目录默认 ACL
-（Windows）或 0600（POSIX）保护，但备份/网盘同步与同用户恶意程序可读取，风险在
-设置页与文档说明；不提供任何"静默"降级路径。
+用户显式选择系统凭据库，失败时保留会话输入，不降级为明文保存。
 """
 import keyring
 from keyring.errors import NoKeyringError, PasswordDeleteError
@@ -38,25 +35,17 @@ def clear_secret():
         pass
 
 def store_secret_file(value):
-    if not isinstance(value, str) or not value:
-        raise ValueError('密钥不能为空。')
-    path = _key_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('w', encoding='utf-8') as stream:
-        stream.write(value)
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass  # Windows profiles already confine home-directory files to the user.
+    """Reject legacy plaintext mode / 拒绝历史明文保存模式。"""
+    raise ValueError('不支持明文保存密钥，请选择系统凭据库或仅本次会话。')
+
 
 def load_secret_file():
-    try:
-        value = _key_file().read_text(encoding='utf-8').strip()
-    except (FileNotFoundError, NotADirectoryError, OSError):
-        return None
-    return value or None
+    """Do not reactivate legacy plaintext credentials / 不自动启用历史明文密钥。"""
+    return None
+
 
 def clear_secret_file():
+    """Allow user-requested legacy cleanup / 支持用户主动清理历史明文文件。"""
     try:
         _key_file().unlink()
     except FileNotFoundError:

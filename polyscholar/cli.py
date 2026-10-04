@@ -71,11 +71,8 @@ def _rubrics_dir():
     override = os.environ.get('POLYSCHOLAR_RUBRICS_DIR')
     if override:
         return Path(override)
-    bundled = Path(__file__).resolve().parents[1] / 'rubrics'
-    if getattr(sys, 'frozen', False) and getattr(sys, '_MEIPASS', None):
-        frozen = Path(sys._MEIPASS) / 'rubrics'
-        return frozen if frozen.is_dir() else bundled
-    return bundled
+    from .resource_paths import resource_path
+    return resource_path('rubrics')
 
 def _rubric_version(data):
     match = re.search(r'版本[：:]\s*([0-9]+\.[0-9]+\.[0-9]+)', data.decode('utf-8', errors='replace')[:2000])
@@ -324,14 +321,15 @@ def cmd_collection(service, args):
 
 # ---------------------------------------------------------------- 翻译与任务
 def cmd_translate(service, args):
-    document = resolve_document(service, args.document)
-    job = service.start_translation(document['id'])
-    print('任务已创建:', job['id'], file=sys.stderr)
     if args.no_wait:
-        _print(dict(id=job['id'], state=job['state']), args);return 0
-    deadline = time.time() + max(60, job.get('timeoutSeconds', 600))
+        raise ValueError('命令行暂不支持后台翻译；请去掉 --no-wait 或在桌面应用创建任务。')
+    document = resolve_document(service, args.document)
+    job = (service.start_html_translation(document['id']) if args.engine == 'html-llm'
+           else service.start_translation(document['id'], engine=args.engine))
+    print('任务已创建:', job['id'], file=sys.stderr)
+    deadline = time.monotonic() + max(60, job.get('timeoutSeconds', 600))
     last = ''
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         current = next((j for j in service.list_jobs() if j['id'] == job['id']), None)
         if current is None:break
         progress = current.get('progress')
@@ -341,10 +339,15 @@ def cmd_translate(service, args):
         if current['state'] in ('completed', 'failed'):break
         time.sleep(1)
     current = next((j for j in service.list_jobs() if j['id'] == job['id']), None)
+    if current is None:
+        raise ValueError('翻译任务已移除。')
     if current['state'] != 'completed':
         raise ValueError(current.get('error') or '翻译失败。')
-    artifact = Path(current['outputDir']) / 'translated.html'
-    print(artifact)
+    artifacts = service.document_translations(document['id'])
+    artifacts = [item for item in artifacts if item.get('jobId') == job['id']]
+    if not artifacts:
+        raise ValueError('任务完成但没有可用译文。')
+    _print(artifacts, args)
     return 0
 
 def cmd_jobs(service, args):
@@ -361,9 +364,10 @@ def cmd_export(service, args):
     if not translations:
         raise ValueError('该文献没有可导出的译文。')
     entry = translations[0]
-    destination = args.output or (args.document[:8] + '-translated.html')
+    name = Path(entry.get('path', 'translated.html')).name
+    destination = args.output or (args.document[:8] + '-' + name)
     job = next(j for j in service.list_jobs() if j['id'] == entry['jobId'])
-    index = job['artifacts'].index('translated.html')
+    index = job['artifacts'].index(name)
     service.export_translation(job['id'], index, str(Path(destination).resolve()))
     print('已导出:', Path(destination).resolve())
     return 0
@@ -637,6 +641,16 @@ def _merge_summary_reports(reports):
     assembled['meta'] = dict(agents=[slot for slot, _ in reports], duplicates_dropped=duplicates)
     return assembled, counts
 
+def _export_aggregate_report(service, destination, report):
+    """Use the same protected atomic writer as desktop exports.
+    与桌面导出共用受保护的原子写入器，不能覆盖库、原文或运行资源。
+    """
+    target = Path(destination).absolute()
+    body = json.dumps(report, ensure_ascii=False, indent=1).encode('utf-8')
+    published = service.store.write_export(target, body, extra_protected=[service.resources])
+    return str(published)
+
+
 def _cmd_score_summary_aggregate(service, args):
     """Two extraction agents, one deterministic merge, written straight to the library.
 
@@ -662,8 +676,7 @@ def _cmd_score_summary_aggregate(service, args):
     payload = dict(total=None, sections=counts,
                    duplicates_dropped=assembled['meta']['duplicates_dropped'])
     if args.out:
-        Path(args.out).write_text(json.dumps(assembled, ensure_ascii=False, indent=1), encoding='utf-8')
-        payload['out'] = str(Path(args.out).resolve())
+        payload['out'] = _export_aggregate_report(service, args.out, assembled)
     if args.apply:
         document = resolve_document(service, args.apply)
         rationale = args.rationale or ''
@@ -768,8 +781,7 @@ def _cmd_score_aggregate(service, args):
                    selected_agent_id=selected, unresolved_disagreement=spread > threshold,
                    rechecked=recheck is not None)
     if args.out:
-        Path(args.out).write_text(json.dumps(assembled, ensure_ascii=False, indent=1), encoding='utf-8')
-        payload['out'] = str(Path(args.out).resolve())
+        payload['out'] = _export_aggregate_report(service, args.out, assembled)
     if args.apply:
         document = resolve_document(service, args.apply)
         rationale = args.rationale or ''
@@ -927,7 +939,8 @@ def build_parser():
 
     p = sub.add_parser('translate', help='arXiv 论文整篇翻译为双语 HTML', parents=[common])
     p.add_argument('document')
-    p.add_argument('--no-wait', action='store_true', help='只创建任务不等待')
+    p.add_argument('--engine', choices=['babeldoc', 'pdfmathtranslate', 'html-llm'], help='默认使用设置中的 PDF 引擎')
+    p.add_argument('--no-wait', action='store_true', help='兼容旧参数；当前拒绝无托管的后台任务')
     p.set_defaults(func=cmd_translate)
 
     p = sub.add_parser('jobs', help='列出翻译任务', parents=[common])

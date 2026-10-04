@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 class LibraryBusy(ValueError):
-    """另一个进程持有库生命周期锁;CLI 以独立退出码区分这种失败。"""
+    """A live owner holds the library / 活动实例持有资料库。"""
 
 
 class LibraryLock:

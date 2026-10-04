@@ -115,20 +115,22 @@ class CliBase(unittest.TestCase):
         self.service.update_document(self.document['id'], {'url': 'https://arxiv.org/abs/2312.04567'})
         self.service.save_settings({'model': 'test-model'})
         page = '<html><body><p class="ps-zh">中文译文</p></body></html>'
-        with patch('polyscholar.service.html_translate.translate_paper',
-                   return_value=(page, 1, 1)):
-            code, out, err = self.run_cli('translate', self.document['id'])
+        self.service.set_session_key('synthetic-session-key')
+        with patch.object(self.service, '_request_html',
+                          return_value=dict(html=page, total=1, translated=1)):
+            code, out, err = self.run_cli('translate', self.document['id'], '--engine', 'html-llm')
         self.assertEqual(code, 0, out + err)
         self.assertIn('translated.html', out)
-        artifact = Path(out.strip().splitlines()[-1])
+        artifact = Path(json.loads(out)[0]['path'])
         self.assertEqual(artifact.read_text(encoding='utf-8'), page)
         code, out, _ = self.run_cli('export-translation', self.document['id'], '-o', str(self.root / 'export.html'))
         self.assertEqual(code, 0)
         self.assertEqual((self.root / 'export.html').read_text(encoding='utf-8'), page)
 
     def test_translate_rejects_non_arxiv(self):
+        self.service.set_session_key('synthetic-session-key')
         self.service.save_settings({'model': 'test-model'})
-        code, _, err = self.run_cli('translate', self.document['id'])
+        code, _, err = self.run_cli('translate', self.document['id'], '--engine', 'html-llm')
         self.assertEqual(code, 1)
         self.assertIn('arXiv', err)
 
@@ -140,3 +142,15 @@ class CliBase(unittest.TestCase):
 from polyscholar.service import LocalService
 if __name__ == '__main__':
     unittest.main()
+
+
+class DetachedTranslationTests(unittest.TestCase):
+    def test_no_wait_is_rejected_before_creating_job(self):
+        from unittest.mock import Mock
+        import contextlib
+        import io
+        service = Mock()
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(['translate', 'any', '--no-wait'], service=service), 1)
+        service.start_translation.assert_not_called()
+        service.start_html_translation.assert_not_called()

@@ -20,7 +20,7 @@ def apply(window,query):
     with patch('polyscholar.ui.library.SearchDialog',return_value=dialog),patch.object(dialog,'exec',return_value=QDialog.DialogCode.Accepted):window.edit_search()
 
 
-def titles(window):return {window.document_tree.topLevelItem(i).text(0) for i in range(window.document_tree.topLevelItemCount())}
+def titles(window):return {window.document_list.item(i).text() for i in range(window.document_list.count())}
 
 
 def main():

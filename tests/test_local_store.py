@@ -34,6 +34,7 @@ class StoreTests(unittest.TestCase):
         self.store.update_document(self.document['id'], {'title': 'Updated', 'notes': 'private'})
         self.assertEqual(self.store.document(self.document['id'])['title'], 'Updated')
         self.store.delete_document(self.document['id'])
+        self.store.purge_document(self.document['id'])
         self.assertTrue(self.source.exists())
         self.assertFalse(original.exists())
 
@@ -98,19 +99,6 @@ class StoreTests(unittest.TestCase):
         with self.store.connection() as db:
             db.execute('INSERT INTO desktop_settings VALUES(1,?)', (json.dumps(settings),))
         self.assertEqual(self.store.get_settings()['cachePath'], '')
-
-    def test_delete_job_removes_record_and_output_but_keeps_active(self):
-        job = self.completed_job()
-        self.assertTrue(Path(job['outputDir']).is_dir())
-        self.store.delete_job(job['id'])
-        self.assertEqual([j['id'] for j in self.store.list_jobs()], [])
-        self.assertFalse(Path(job['outputDir']).exists())
-        with self.assertRaises(ValueError):
-            self.store.delete_job(job['id'])
-        active = self.store.new_job(self.document['id'], 'babeldoc')
-        with self.assertRaisesRegex(ValueError, '进行中'):
-            self.store.delete_job(active['id'])
-        self.assertEqual(len(self.store.list_jobs()), 1)
 
 if __name__ == '__main__':
     unittest.main()

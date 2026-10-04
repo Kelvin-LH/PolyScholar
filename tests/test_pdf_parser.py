@@ -43,15 +43,16 @@ class ParserTests(unittest.TestCase):
             self.assertLess(abs(actual.x0-expected.x0)+abs(actual.y0-expected.y0)+abs(actual.x1-expected.x1)+abs(actual.y1-expected.y1),0.01)
         self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(),before)
 
-    def test_blank_pdf_is_no_text_and_reparse_rotates_revision(self):
+    def test_blank_pdf_is_no_text_and_reparse_marks_old_evidence_stale(self):
         blank=self.pdf('blank.pdf',text='')
         self.assertEqual(self.service.parse_document(blank['id'])['status'],'no_text')
         self.assertEqual(self.service.document_blocks(blank['id']),[])
         item=self.pdf('text.pdf');self.service.parse_document(item['id'])
-        self.assertTrue(self.service.document_blocks(item['id']))
-        old=self.service.current_document_ir(item['id'])['id']
+        block=self.service.document_blocks(item['id'])[0]
+        claim=self.service.save_claim(item['id'],'Local note',[{'blockId':block['id'],'quote':'Original evidence text.'}])
+        self.assertFalse(claim['stale'])
         self.service.parse_document(item['id'])
-        self.assertNotEqual(self.service.current_document_ir(item['id'])['id'],old)
+        self.assertTrue(self.service.list_claims(item['id'])[0]['stale'])
 
     def test_invalid_pdf_and_modified_source_do_not_create_ir(self):
         invalid=self.root/'bad.pdf';invalid.write_bytes(b'%PDF-1.7 invalid')

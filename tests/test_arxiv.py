@@ -89,7 +89,7 @@ class ParseTests(unittest.TestCase):
 
     def test_rejects_non_arxiv_and_invalid_identifiers(self):
         for text in ['https://example.org/abs/2312.04567', '1234.567', 'README/x1234567',
-                     'not-a-paper', '', None, 'x' * 301]:
+                     'not-a-paper', 'https://evil.invalid/arxiv.org/abs/2312.04567', '', None, 'x' * 301]:
             self.assertIsNone(arxiv.parse_identifier(text), text)
 
     def test_parse_identifiers_deduplicates_and_keeps_order(self):

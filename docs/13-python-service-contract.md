@@ -4,33 +4,27 @@
 
 ## 调用接口
 
-`LocalService(data_dir=None, resources_dir=None)`。默认资料目录：冻结发行采用各平台标准应用数据目录；源码运行为仓库内 `data/`（便携，.gitignore 排除），首次启动自动从旧 AppData 位置完整复制文献库/原件/缓存，旧目录保留为备份；打包资源位于 macOS `Contents/Resources/resources`，Windows/Linux `_MEIPASS/resources`。开发时使用工程资源根目录。
+`LocalService(data_dir=None, resources_dir=None)`。默认资料目录采用各平台标准应用数据目录；打包资源位于 macOS `Contents/Resources/resources`，Windows/Linux `_MEIPASS/resources`。开发时使用工程资源根目录。
 
 - `list_documents() -> list[dict]`
 - `import_pdf(path) -> dict`：100 MiB 限制、PDF 文件头验证、SHA-256 去重、只读本地对象副本。
-- `update_document(document_id, patch) -> dict`：标题、作者、DOI、年份、标签、摘要、来源链接和本地笔记。
-- `delete_document(document_id)`：保护正在执行的任务；删除库中副本与该文献任务产物，保留外部原文件。
+- `update_document(document_id, patch) -> dict`：标题、作者、DOI、年份、标签和本地笔记。
+- `delete_document(document_id)`：保护正在执行的任务，默认移入回收站；显式永久删除才清理副本与产物，保留外部原文件。
 - `read_pdf(document_id) -> bytes`：供 QtPdf 的 QBuffer 使用。
 - `get_settings() -> dict`；`save_settings(settings) -> dict`。
 - `set_session_key(key)`：密钥仅存进程内存，传空文本清除，关闭应用清除；不写 JSON、SQLite、日志。
-- `store_api_key(key, mode='os')`：校验后激活会话密钥并按所选方式持久化。`mode='os'` 写入 OS 凭据库（Windows 凭据管理器/macOS 钥匙串/Linux Secret Service，经 keyring 25.6.0）；`mode='file'` 按用户 2026-10-02 的显式选择写入明文配置文件 `~/.polyscholar/api_key`（与常见 CLI agent 的 auth.json/token 文件一致，POSIX 0600，Windows 依赖用户主目录默认 ACL）。`clear_stored_api_key()` 同时删除两种存储；`stored_key_location()` 报告当前存储位置（'os'/'file'/None）。`start_translation`/`list_models` 未传会话密钥时按"会话 → 凭据库 → 文件"回退。无安全凭据库时 OS 方式明确报错；明文文件仅由用户显式选择产生，文件纳入备份同步或被同用户程序读取的风险在设置页与文档说明。
 - `discover_engine(engine) -> {pythonPath, available, message}`：只查应用 `runtime/<engine>/bin/python3` 或开发 `.runtime/<engine>`，Windows 查 `python.exe`/`Scripts/python.exe`；独立验证 BabelDOC 0.6.4、PDFMathTranslate 1.9.11。不存在时明确报告，不回退到系统 Python。
 - `list_models(endpoint=None, key=None) -> list[str]`：使用会话密钥 GET OpenAI 兼容 `<base>/models`，超时 15 秒、响应最多 1 MiB、禁止重定向凭据；去重排序，失败只显示脱敏提示，允许手动填写模型名。GUI 应在 QThread 调用。
-- `arxiv_lookup(query, endpoint=None) -> list[dict]`：解析粘贴的 arXiv 链接或编号，向 arXiv Atom API 查询公开元数据；仅发送论文编号，详见文末 arXiv 导入一节。
-- `arxiv_import(entries, collection_id=None)`：下载所选条目 PDF 并按既有哈希去重入库，自动填写书目字段；逐条返回成功与脱敏错误，详见文末 arXiv 导入一节。
 - `list_jobs() -> list[dict]`
-- `start_translation(document_id, pages='') -> dict`：2026-10-02 起 HTML 路线——解析条目的 arXiv 链接，后台线程执行 `html_translate.translate_paper`（arXiv/ar5iv HTML 逐段送用户配置的 LLM，并发 4，MathML 占位保留），产物为 `translated.html` 双语页；`pages` 参数保留但忽略（总是全文）。要求条目带 arXiv 链接；无链接明确拒绝。首版全局一个活动任务。旧 BabelDOC/pdf2zh 运行时路线已删除。
+- `start_translation(document_id, pages='') -> dict`：自动选择所属引擎内置解释器，后台线程执行 `python -I integrations/job_worker.py`，密钥经 stdin 传入；默认已授权 API 与模型/字体下载，无额外勾选。首版全局一个活动任务。
 - `read_artifact_pdf(job_id, artifact_index=0) -> bytes`
 - `export_translation(job_id, artifact_index, path)`：仅可复制已完成任务的真实 PDF；拒绝产物路径穿越、内部译文覆写、源文献对象库覆写及硬链接别名；目标由原生保存对话框选择。
 - `export_metadata(document_ids, format, path)`：`document_ids` 可为单个 ID 或 ID 列表；格式为 `csl-json`、`bibtex`、`ris`。属于元数据交换，不承诺 GB/APA 等最终排版。
-- `job_output_dir(job_id) -> Path`：已完成任务的真实产物目录（仅限应用自建 UUID 目录），供"打开目录"使用。
-- `attachment_file_path(document_id) -> Path`：库内 PDF 的本机对象路径，供附件双击以系统默认程序打开。
-- 任务成功后，单译文产物（优先 mono，否则 dual）自动挂载为所属主文献的"已有译文"附件；子附件的译文挂载到其主文献。挂载失败仅忽略，不影响任务完成状态。
 - `close()`：清除密钥、终止活动 worker 并等待回收；远程已发送请求可能计费。GUI 退出时调用。
 
-文献字典字段：`id,title,authors,doi,year,tags,notes,abstract,url,sha256,filename,sizeBytes,createdAt`。作者使用分号分隔，`tags` 为字符串列表，时间为 UTC ISO8601。
+文献字典字段：`id,title,authors,doi,year,tags,notes,sha256,filename,sizeBytes,createdAt`。作者使用分号分隔，`tags` 为字符串列表，时间为 UTC ISO8601。
 
-设置字段：`endpoint,model,engine,pythonPath,cachePath,sourceLanguage,targetLanguage,doiEnabled,timeoutSeconds,keyStorage`（`keyStorage` 记住用户选择的密钥存储方式：空/os/file，本身不是密钥）。`pythonPath` 只用于兼容旧设置/运行状态，实际引擎路径受应用控制，无用户安装要求。模型名默认为空，通过服务查询或手动填写。拒绝设置中出现额外字段或 API 密钥；endpoint 拒绝凭据、query、fragment，要求 HTTPS 或本机环回 HTTP。
+设置字段：`endpoint,model,engine,pythonPath,cachePath,sourceLanguage,targetLanguage,doiEnabled,timeoutSeconds`。`pythonPath` 只用于兼容旧设置/运行状态，实际引擎路径受应用控制，无用户安装要求。模型名默认为空，通过服务查询或手动填写。拒绝设置中出现额外字段或 API 密钥；endpoint 拒绝凭据、query、fragment，要求 HTTPS 或本机环回 HTTP。
 
 任务字段：`id,documentId,engine,state,createdAt,error,artifacts,outputDir,timeoutSeconds`；状态为 queued/running/completed/failed。输出目录固定存入任务记录，缓存变更只影响新任务；旧任务结果仍可读。缓存目录必须为本机绝对路径、可创建且可写，并且在源文献对象库之外。
 
@@ -79,14 +73,14 @@ SQLite v5 在升级前备份 `library-before-v5.sqlite3`，保存批次模型、
 
 `import_attachment(parent_id,path,role='supplement')` 原子建立子文献和附件关系；不增加文献库主条目。相同归属重复导入保留原角色及 ID，另一归属拒绝。普通 `import_pdf` 重复导入隐藏子附件会返回所属主条目。
 
-`delete_attachment(parent_id,document_id)` 仅删除额外附件；根 PDF 必须通过 `delete_document` 删除整个条目。两种删除均检查相应子任务，且删除整个条目检查所有子附件；保留外部原文件，清理拥有的对象、任务与证据。集合和原生书目引用列表只使用根条目。读取、解析、模型摘要和翻译依旧接受对应 PDF 的独立 ID，不将子附件内容与主 PDF 混用。
+`delete_attachment(parent_id,document_id)` 仅删除额外附件；根 PDF 必须通过 `delete_document` 删除整个条目。两种删除均检查相应子任务，且删除整个条目检查所有子附件。当前 v9 的默认删除改为移入回收站；永久清理须显式调用下述 purge 接口。集合和原生书目引用列表只使用根条目。读取、解析、模型摘要和翻译依旧接受对应 PDF 的独立 ID，不将子附件内容与主 PDF 混用。
 
 v6 升级前备份 `library-before-v6.sqlite3`。当前不支持外部链接、非 PDF 附件或主 PDF 替换。
 
 
 ## 类型化文献信息（保持 v6）
 
-`update_document` 支持 `itemType`：arxiv-preprint（2026-10-02 新增，用户明确本程序以 arXiv 为主）、article-journal、paper-conference、book、thesis。arXiv 预印本仅适用期刊/论文集与日期字段，年份由日期派生；CSL 导出为通用 article，BibTeX 用 @misc，RIS 用 GEN，不冒充正式出版物。`creators` 为有序列表，含 role=author/editor、type=person/organization；个人使用 literal 或 family/given，机构仅 literal。旧作者文本只按分号分隔，保留完整姓名，不推断姓与名。普通字段编辑保留作者身份与顺序。
+`update_document` 支持 `itemType`：article-journal、paper-conference、book、thesis。`creators` 为有序列表，含 role=author/editor、type=person/organization；个人使用 literal 或 family/given，机构仅 literal。旧作者文本只按分号分隔，保留完整姓名，不推断姓与名。普通字段编辑保留作者身份与顺序。
 
 出版字段包含 publicationTitle、publisher、place、date、volume、issue、pages、isbn、edition、eventTitle、institution、thesisType。日期采用 ASCII YYYY / YYYY-MM / YYYY-MM-DD 并校验日历；日期与年份冲突在写入前拒绝。切换类型保留暂不适用字段，界面提示，导出仅包含当前类型适用字段。现有 v6 JSON 扩展不需要 SQL 迁移或重写文件 ID。
 
@@ -104,14 +98,6 @@ CSL JSON 保留类型、作者/编者角色、日期和出版字段；BibTeX 普
 此增量对标 [Zotero 官方高级搜索与保存搜索](https://www.zotero.org/support/searching)，尚未包含全文索引、嵌套保存规则或日期相对条件。
 
 
-## AI 评分维度（v9）
-
-用户决策：2026-10-02 起软件转型为 AI 使用的文献保存库。新增 `desktop_scores` 表（v9，升级前备份 library-before-v9.sqlite3）：document_id+kind 主键。kind=paper 论文评分 / confidence 置信度评分（score 0–100 可空，rationale 得分/失分理由，detail 为评分明细 JSON：维度分、三子代理子评分、红旗等）；kind=summary AI 提炼（2026-10-02 新增：score 恒空，rationale 为一句话概览，detail 为结构化 JSON——problem/method/domains/findings 等），供 agent 快速了解论文解决的问题、方法、适用领域与发现的问题。
-
-`set_scores(document_id, entries)` 校验并 upsert（每文献每类一条，重评覆盖并记审计 score_updated）；`document_scores(id)` 返回两类评分；`list_documents/list_root_documents` 附带 `scores:{paper,confidence}` 数值供列表排序。评分的**执行**由外部 agent 依据打分文档完成；两份打分文档（2026-10-02 由用户用 prompts/ 提示词经 GPT 生成）已就位于 `rubrics/paper-scoring.md`（v1.0.0，五维 20 条目连续条件计分）与 `rubrics/confidence-scoring.md`（v1.0.0，四维 20 条目+红旗扣分+中心结论上限），均含三子代理盲评中位数汇总与机器可读 JSON Schema（agent_report/汇总报告两级），MCP/命令行接口后续交付；本程序只负责存储、校验、展示与排序。
-
-界面调整：文献列表改为三列（标题/论文分/置信度）可点击表头排序，未评分排在最后；笔记功能自界面移除（历史 JSON 数据保留但不再展示与写入，存储字段仍兼容）。
-
 ## 本地 PDF 全文索引（v8）
 
 `search_fulltext(text,collection_id=None,unfiled=False,tags=None,include_descendants=False,query=None,limit=200,metadata_text='')` 检索当前 DocumentIR 文本。元数据规则先筛主条目，再检索其家族 PDF；命中保留实际 documentId/parentDocumentId/revisionId/blockId、页码及坐标，子附件不冒充主 PDF。短字及中文采用字面子串；Python casefold 后三字符以上走 SQLite FTS5 trigram 候选与 instr 精确校验，一、二字符走索引文本扫描。百分号、引号、OR 等不是表达式。返回精确 total、显式 truncated，默认最多200条、允许1–1000；每项只返回最多512字符原文摘录，不返回完整大块文本。全文 SQL 和摘录计算检查30秒预算，超时拒绝部分结果；metadata 筛选沿用现有实现，并在进入/返回全文阶段检查预算。
@@ -123,18 +109,64 @@ SQLite v8 升级前备份 library-before-v8.sqlite3，回填已有当前版本�
 搜索完全本地，不执行 OCR 或模型调用，不处理图片中的不可提取文字。实现依据 [SQLite FTS5 trigram 文档](https://www.sqlite.org/fts5.html#the_trigram_tokenizer)。
 
 
-## MCP server（mcp.md）
+## 回收站与持久化清理（v9）
 
-`polyscholar/mcp_server.py`(mcp 2.3.0,可选依赖组 `mcp`)以 stdio 运行,只暴露 `cli_docs` 与 `cli_run` 两个工具:前者返回 cli.md 契约全文,后者白名单执行 CLI 子命令并回传退出码与输出(上限 100 KiB)。server 不含业务逻辑;软件用途在 server instructions。`POLYSCHOLAR_DATA_DIR` 指定资料目录。配置见 mcp.md。
+`delete_document(id)` 仅接受根条目，`delete_attachment(parent_id,id)` 验证归属；默认都调用移入回收站。`trash_document(id)` 支持根/子 PDF 的独立标记。根标记隐式隐藏整个家族；`restore_document(id)` 仅移除指定标记，恢复根不移除此前独立删除的子标记。父条目仍在回收站时拒绝恢复子附件。保留元数据、文件、成员关系、IR、摘要及任务；已另行删除的集合不凭空恢复。
 
-## 命令行入口（cli.md）
+`list_trash()` 返回显式记录与 scope/restoreBlocked；正常文献、附件、任务、摘要、引用及全文范围排除失活 PDF。更新、解析、新任务、摘要及引用操作复用 active 校验。内部文献/任务列表仍保留所有记录供导出保护和清理。重复导入回收站中的同一文件要求先恢复。
 
-`polyscholar/cli.py` 与 GUI 共用 LocalService 契约：add/list/show/update/remove/text/parse/collection/translate/jobs/export-translation/summarize/score。`--json` 输出机器可读结果；文献引用支持 id/id 前缀/唯一标题片段；错误脱敏写 stderr、退出码 1。单实例锁与 GUI 互斥(先关闭 GUI)。`score set` 是 agent 打分的写入端：rubric 阅读与三子代理盲评由 agent 侧执行，程序只校验并存储。面向 agent 的完整命令说明见仓库根 cli.md。
+`deletion_preview(id)` 返回 documentIds、counts（pdfs/notes/claims/jobs/artifacts/collections）、managedFiles、sourceFiles、explicitMarker、activeJobs、purgeAllowed。界面先预览再确认；确认文本按纯文本显示。`purge_document(id)` 只接受显式回收标记，活动任务或本机解析/摘要操作阻止删除。数据库删除、固定审计与清理计划同事务；提交之后才删除托管副本和任务目录，外部原件始终保留。
 
-## arXiv 导入（保持 v8）
+SQLite 与文件系统不能共同原子提交。返回 cleanupComplete=False 表示数据库已永久删除、仍有待清理文件，不能恢复条目，也不能显示清理成功。`list_pending_cleanup()` 和 `retry_cleanup(cleanup_id=None)` 支持重启后逐项或全部重试；固定 cleanup_failed 错误码不含原始日志。清理计划保存路径、文件/目录及父目录身份和原先是否存在，每次重试核对，拒绝链接和路径替换；重新导入后仍被数据库引用的对象保留。待清理路径继续受导出防覆盖保护。
 
-`arxiv_lookup(query, endpoint=None)` 解析粘贴的 arXiv 链接或编号（每行一个、去重、上限 50；新式 `2312.04567` 与旧式 `cs/0301012` 均可，裸旧式编号仅接受真实档案前缀），向 arXiv Atom API 查询标题、作者、日期、摘要、DOI 与 PDF 链接。请求只发送论文编号，带固定 User-Agent；元数据响应上限 4 MiB、超时 30 秒；地址要求 HTTPS 或本机环回 HTTP。
+v9 升级前备份 library-before-v9.sqlite3；回收标记、队列、审计触发器及版本号同事务迁移。原生回收站与全文检索复用 ManagedIODialog 和主窗口 IO 生命周期，没有额外线程管理器。此功能不自动清空回收站，不代替安装包或真实翻译验收。
 
-`arxiv_import(entries, collection_id=None)` 逐条下载所选 PDF（校验文件头与 100 MiB 上限，条目之间保留间隔遵守上游礼貌策略），按既有 SHA-256 去重入库，自动填写标题、作者、日期、摘要、DOI 与来源 URL，可加入指定集合。作者存为结构化完整姓名（literal），不推断姓与名。逐条返回成功与脱敏错误，单条失败不影响其余条目；条目数据在入库前按白名单键与长度校验。
 
-文献字典新增 `abstract` 与 `url` 字段（JSON 扩展，无 SQL 迁移，旧条目读取时补空值）；CSL JSON/BibTeX/RIS 导出包含摘要与链接，RIS 摘要按既有规则清理换行。真实 arXiv 网络载荷、限流与重定向行为未验证；环回合成测试见 `tests/test_arxiv.py`。
+## 重复候选与人工书目合并（v10）
+
+`list_duplicate_candidates(limit=200)` 只读取活动根条目的候选字段，返回 items/documentIds/reasons、精确 total 和 truncated。相同类型内：规范 DOI 相同、格式/校验位有效的 ISBN 相同，或规范标题相同且完整作者身份相同、已知年份相差不超过1年。ISBN-10 转为对应978 ISBN-13；13位限定978/979。不是文件哈希去重，也不证明同一作品，不能自动合并。候选检测不联网；上限为20000根条目、64MiB候选字段、200000作者索引项、100000对和30秒检查预算，超过明确失败，不返回虚假的截断总数。ISBN格式依据 [International ISBN Agency](https://www.isbn-international.org/index.php/node/10)，不联网核查发行注册真实性。
+
+`merge_preview(document_ids,master_id=None)` 接受2–20个不同、相同类型的活动根条目，返回规范元数据、逐字段来源选项、关联数量、activeJobs及revision。手动选择不依赖候选算法；不能把子附件当书目主项。预览最多2000个家族记录，读取事务内逐行计算关联状态摘要；IR原文不复制进历史快照。
+
+`merge_documents(document_ids,master_id,field_sources,expected_revision)` 要求当前预览摘要匹配，拒绝关联漂移、活动任务及实际在途解析/摘要/翻译。字段来源只能取所选条目；未指定沿用主条目，日期/年份冲突拒绝。主PDF不换；其他原主PDF作为明确标注的补充附件，其既有子附件迁移至主条目。原PDF、任务、产物、IR、摘要、证据和外部来源路径保持独立身份；子附件回收标记保留。集合和标签取并集；所选主条目的不同笔记带来源ID合并，超出既有字段上限则拒绝，不截断。内部 mergeNoteSources 保存贡献列表；只有当前笔记仍逐字等于受控格式化结果才复用贡献，多轮合并不再次嵌套来源标题；人工修改后的笔记按新的真实原文保留，不猜测文本头部。
+
+SQLite v10 升级前备份 library-before-v10.sqlite3。关系迁移、主书目更新、合并前书目/关系快照与固定 documents_merged 审计同事务，不删除文件。`list_merge_history(master_id)` 供本地查看历史，快照不作为自动撤销接口；合并不可自动撤销。显式永久删除所属文献才级联清除历史。外部已导出的引用不自动改写，不宣称 Zotero Word 插件等价。
+
+## 无文件书目与主要 PDF（v11）
+
+`create_bibliographic_item(metadata,collection_id=None)` 复用既有元数据校验，创建四类书目并可同事务加入集合；标题必填，审计失败全部回滚。无文件条目 `fileKind='bibliographic'`，SHA/filename/sizeBytes/primaryPdfId 为 null，sourcePaths 为空；数据库 SHA 为真正 NULL，没有占位文件。`hasPdf` 表示该身份本身是真 PDF，根条目的 `primaryPdfId/hasAnyPdf` 表示当前可用的主要文件。
+
+`primary_pdf_id(root_id)` 返回活动、真实、归属正确的 PDF ID；旧 PDF 根默认使用自身。`set_primary_pdf(root_id,pdf_id)` 显式选择并与固定审计同事务。首个后加 PDF 在尚无保存选择时自动设为主要文件；主要附件移入回收站后返回 None，保存原选择供恢复，不回退到其他附件。已有选择被隐藏时新增附件不替换；恢复不覆盖用户后来选择。永久删除主要附件同事务清空指针，仍不回退；以后新导入可成为主要文件。
+
+无文件条目可组织、检索、导出引用、合并和回收，但读 PDF、IR、解析、全文索引、证据、翻译和模型摘要拒绝该身份，调用者必须选择实际文件 ID。`list_attachments` 只返回真实 PDF；内部文献列表包含所有书目/文件用于历史与保护，路径和哈希保护只取真实文件。无文件条目不显示为等待解析的全文覆盖项。
+
+合并无文件来源保留 `merged_record` 关系，移走其真实子附件，不伪装成文件。空书目主项可继承来源已选择的活动 PDF；已有隐藏选择保持。预览返回计划 primaryPdfId，实际提交仍核对 revision；counts.records 是记录数，pdfs/attachments 只计真实文件。历史读取先检查家族快照总字节不超过32 MiB。
+
+v11 升级前备份 library-before-v11.sqlite3；原子重建可空 SHA 表与扩展关系角色，保留旧 ID、哈希、索引、触发器、IR、成员与任务。重建期间暂关外键避免旧关系级联删除，提交前 foreign_key_check，所有常规连接开启外键。模式错误或关系损坏保持旧版本与数据，拒绝启动，不绕过校验。
+
+## 本地引文导入
+
+`preview_metadata_import(path,format)` 显式接受 bibtex/ris/csl-json，读取最多8 MiB UTF-8文件（可有BOM），完整解析最多1000记录，超限拒绝且不截断。BibTeX使用固定bibtexparser，RIS使用固定rispy，CSL采用严格JSON；不存在的文件、格式错误、重复JSON/BibTeX字段、非有限数字和未结束RIS记录均不静默忽略。
+
+返回 token/format/sourceName/fingerprint/total/validCount/invalidCount/warnings/items。每项 index/sourceId/title/valid/metadata/warnings/errors；元数据复用既有四类型、日期、作者和字段校验。未知类型不可选；未导入来源字段、完整姓名的个人/机构歧义及未解释LaTeX命令明确警告，无法映射日期或冲突别名无效。URL、附件字段不访问，来源ID不用作本地ID。作者顺序保留，不猜拆名字；当前BibTeX学位论文导出用@misc及显式polyscholaritemtype标记，不推断博士。其他软件可忽略该自定义标记，不能宣称所有字段无损往返。
+
+解析与完整IPC接收在独立spawn进程中受30秒预算监督，结果最多32 MiB；禁宏展开/交叉引用补填，不运行TeX。解析器原始诊断丢弃，不显示或写入原始来源日志。主桌面只保持最多8份、合计32 MiB可信预览，超量淘汰旧项；关闭清空并终止回收解析进程。冻结入口使用freeze_support，不在解析子进程创建Qt窗口或用户库；真实冻结包验收仍单列待执行。
+
+`import_metadata_preview(preview,selected_indices,collection_id=None)` 只接受非空、唯一、真正整数的有效索引；拒绝篡改、失效或已消费token。源文件重新读取、哈希及解析结果核对后再提交，漂移必须重新预览。所选记录用新UUID在单事务内创建无文件书目、目标集合关系及固定citation_imported事件；失败无半批记录且token可重试，成功消费token。返回 documentIds/importedCount/collectionId；不自动去重合并，不改已有记录，不引入文件对象或下载任务。UI共享ManagedIODialog，显式勾选、不默认全选；失败保留草稿但解析失败或来源变化禁止沿用旧预览提交。
+
+
+## 本机 Zotero 迁移与档案（v12）
+
+`preview_zotero_migration(directory,linked_directory=None)` 只接受显式本地目录；可选 linked_directory 限定链接附件读取范围，相对 attachments: 路径和本平台范围内绝对路径可用，其他平台绝对路径不猜测。SnapshotReader用普通文件只读、禁止链接/非阻塞句柄复制并复核DB、WAL、SHM、journal；SQLite只操作受管副本。userdata白名单121/123/130并验证命名列与关系。返回token/sourceName/fingerprint/schemaVersion、items、collections、resources、counts与warnings。每item有sourceId/key/itemType/title/status/native或archive、metadata/deleted/warnings/selectable；子附件/笔记/批注由所选父条目传递纳入，不作为顶层重复选择。
+
+`import_zotero_preview(preview,selected_ids=None)` 验证完整可信预览、唯一顶层字符串ID及来源/真实资源未漂移。UI显式非空勾选；服务None表示所有可选顶层条目。部分选择只归档所选传递子图与相关集合、字段值、作者、标签、library/group；全选保留已支持读取的全图谱及空集合/保存搜索。源类型、字段、HTML笔记、批注位置或未复制资源不丢弃为假成功，原始档案与原生四类型适配分别计数。
+
+返回持久receipt：id/sourceName/sourceDirectory/linkedDirectory/schemaVersion/fingerprint/createdAt/selectedSourceIds/counts/mappings/sourceIdentities/collectionMappings/warnings。sourceIdentities保存libraryID/key/localId；本地UUID独立于来源。nativeActive/nativeTrashed、pdfs、archivedResources与archive分别计数。真实受管PDF每来源附件独立ID，允许多个父条目共用哈希对象；普通无所属参数的重复PDF导入遇多owner时拒绝歧义。受管其他/独立文件真实字节归受管档案对象；链接附件、受管HTML伴随文件、嵌入图像及按库类型定位的批注缓存保存真实字节。缓存未解码、原生批注未恢复；链接HTML周边未映射仍明示pending。
+
+`list_zotero_migrations()` 返回收据列表；`read_zotero_migration(id)` 返回{receipt,archive:{tables,items,resources}}，原始HTML只供纯文本查看。`export_zotero_resource(receipt_id,source_id,destination)` 的第二参数传资源 resourceId（旧单文件资源仍等于 sourceId）。此接口 仅导出已保存档案字节，校验固定receipt/hash路径、普通单链接、尺寸/身份/哈希后共享protected atomic_export；不自动执行文件。普通原件与整个来源Zotero目录与已选链接目录纳入持久防覆盖保护。
+
+`cancel_zotero_migration()` 在复制、SQL检查、分块发布及提交前触发检查；提交后是真实成功收据，不假报回滚。PDF元信息通过spawn固定小结果监督，不在Qt进程调用原生解析；10秒或总预算剩余时间，失败/超时只保字节到档案。关闭终止回收活动校验进程并清临时副本。SQL迁移v12先备份，原生条目、集合、来源映射、档案和zotero_migrated审计同事务；失败清本轮新资源，不删除旧共享文件。持久发布日志登记文件身份后用硬链接发布；提交后清暂存，返回publicationCleanupComplete。启动在库锁和模式成功后恢复合法日志，身份替换/未知文件保留pending；详见迁移范围。进程崩溃回归不替代断电、Windows ACL或凭据清理验收。
+
+导入导出原生中心只路由已有PDF、引文、Zotero、译文和档案操作，复用校验、worker生命周期及导出保护。源码回归不替代真实Zotero含条目库或冻结安装包验收。
+
+资源报告新增resourceId；主文件仍取sourceId，快照子文件取sourceId:snapshot:relativePath，批注缓存取sourceId:annotation-cache。sourceId用于所选条目传递子图，resourceId用于逐文件归档及导出，避免同一源条目的多个文件覆盖。

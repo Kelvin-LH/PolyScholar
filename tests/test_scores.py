@@ -74,7 +74,7 @@ class ScoreTests(unittest.TestCase):
 
     def test_schema_is_v12_with_scores_table(self):
         with self.service.store.connection() as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 12)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 13)
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertIn('desktop_scores', tables)
 
@@ -94,7 +94,7 @@ class ScoreTests(unittest.TestCase):
         self.service.store = LocalStore(self.service.store.root)
         self.addCleanup(self.service.store.close)
         with self.service.store.connection() as db:
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 12)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 13)
             ddl = db.execute("SELECT sql FROM sqlite_master WHERE name='desktop_scores'").fetchone()[0]
             self.assertIn("'summary'", ddl)
             db.execute("INSERT INTO desktop_scores VALUES(?,?,?,?,?,?,?)",

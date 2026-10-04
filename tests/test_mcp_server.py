@@ -71,3 +71,25 @@ class McpServerTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ManagedCommandTests(unittest.TestCase):
+    def test_invalid_quotes_are_rejected(self):
+        self.assertIn('拒绝执行', mcp_server.cli_run('list "'))
+
+    def test_output_is_bounded_while_child_runs(self):
+        import sys
+        with patch.object(mcp_server, 'MAX_OUTPUT', 512):
+            result = mcp_server._run_bounded([sys.executable, '-c', 'import sys; sys.stdout.write("x" * 2000000); sys.stderr.write("y" * 2000000)'])
+        self.assertIn('exit=0', result)
+        self.assertIn('输出截断', result)
+        self.assertLess(len(result), 1500)
+
+    def test_timeout_stops_managed_child(self):
+        import sys
+        import time
+        begin = time.monotonic()
+        with patch.object(mcp_server, 'RUN_TIMEOUT', 0.1):
+            result = mcp_server._run_bounded([sys.executable, '-c', 'import time; time.sleep(30)'])
+        self.assertIn('进程树已终止', result)
+        self.assertLess(time.monotonic() - begin, 5)

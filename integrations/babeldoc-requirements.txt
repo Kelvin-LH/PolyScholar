@@ -1,0 +1,2 @@
+babeldoc==0.6.4
+PyMuPDF==1.28.2

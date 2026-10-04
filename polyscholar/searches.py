@@ -12,7 +12,7 @@ from .metadata import normalize_metadata, creator_display
 from .library import clean_name
 from .validation import QUERY_TEXT_POLICY
 
-SEARCH_FIELDS = ('title', 'creator', 'doi', 'year', 'itemType', 'publicationTitle', 'publisher', 'isbn', 'tag', 'notes')
+SEARCH_FIELDS = ('title', 'creator', 'doi', 'year', 'itemType', 'publicationTitle', 'publisher', 'isbn', 'tag', 'notes', 'url', 'abstract')
 TEXT_OPERATORS = ('contains', 'not_contains', 'is', 'is_not', 'is_empty', 'is_not_empty')
 SEARCH_SCHEMA = '''CREATE TABLE IF NOT EXISTS desktop_saved_searches(
     id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, query TEXT NOT NULL,
@@ -72,10 +72,6 @@ class SearchLibrary:
     def search_documents(self, text='', collection_id=None, unfiled=False, tags=None, include_descendants=False, query=None):
         rules = validate_query(query) if query is not None else None
         documents = super().search_documents(text=text, collection_id=collection_id, unfiled=unfiled, tags=tags, include_descendants=include_descendants)
-        with self.connection() as db:
-            scores = self._score_map(db)
-        for document in documents:
-            document['scores'] = scores.get(document['id'], {})
         return [document for document in documents if matches_query(document, rules)] if rules else documents
 
     def list_saved_searches(self):

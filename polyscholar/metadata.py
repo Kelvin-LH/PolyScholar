@@ -7,28 +7,50 @@ Names and degree types are preserved without inference.
 from datetime import date as calendar_date
 import json
 import re
+from urllib.parse import urlsplit
 
-ITEM_TYPES = ('arxiv-preprint', 'article-journal', 'paper-conference', 'book', 'thesis')
-BIB_FIELDS = ('publicationTitle', 'publisher', 'place', 'date', 'volume', 'issue', 'pages', 'isbn', 'edition', 'eventTitle', 'institution', 'thesisType')
+ITEM_TYPE_LABELS = {
+    'article-journal': '期刊论文', 'paper-conference': '会议论文',
+    'book': '图书', 'thesis': '学位论文', 'arxiv-preprint': 'arXiv 预印本',
+}
+ITEM_TYPES = tuple(ITEM_TYPE_LABELS)
+BIB_FIELDS = ('publicationTitle', 'publisher', 'place', 'date', 'volume', 'issue', 'pages', 'isbn', 'edition', 'eventTitle', 'institution', 'thesisType', 'url', 'abstract')
 APPLICABLE = {
-    'arxiv-preprint': {'publicationTitle', 'date'},
     'article-journal': {'publicationTitle', 'date', 'volume', 'issue', 'pages'},
     'paper-conference': {'publicationTitle', 'publisher', 'place', 'date', 'pages', 'isbn', 'eventTitle'},
     'book': {'publisher', 'place', 'date', 'volume', 'isbn', 'edition'},
     'thesis': {'institution', 'place', 'date', 'thesisType'},
+    'arxiv-preprint': {'date'},
 }
-# arXiv 预印本没有出版地/卷期页；导出按通用条目处理，不冒充正式出版物。
-CSL_TYPES = {'arxiv-preprint': 'article', 'article-journal': 'article-journal',
-             'paper-conference': 'paper-conference', 'book': 'book', 'thesis': 'thesis'}
-BIBTEX_TYPES = {'arxiv-preprint': 'misc', 'article-journal': 'article',
-                'paper-conference': 'inproceedings', 'book': 'book', 'thesis': 'misc'}
-RIS_TYPES = {'arxiv-preprint': 'GEN', 'article-journal': 'JOUR',
-             'paper-conference': 'CPAPER', 'book': 'BOOK', 'thesis': 'THES'}
+# URL and abstract are shared metadata, not a journal-specific field.
+# 网址及摘要属于通用元数据，不随切换条目类型丢失。
+for _fields in APPLICABLE.values():
+    _fields.update({'url', 'abstract'})
 
 def _text(value):
     if not isinstance(value, str) or len(value.encode('utf-8')) > 65536 or '\x00' in value:
         raise ValueError('文献元数据必须是最多 64 KiB 的文本。')
     return value
+
+def validate_metadata_url(value):
+    """Store web references without fetching or accepting active URL schemes.
+    只保存网页引用，不联网读取，也不接受活动协议或嵌入凭据。
+    """
+    _text(value)
+    if not value:
+        return value
+    try:
+        parsed = urlsplit(value)
+        parsed.port
+        valid = (parsed.scheme in ('https', 'http') and parsed.hostname
+                 and not parsed.username and not parsed.password
+                 and not any(ord(char) < 32 or char.isspace() for char in value))
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError('文献网址必须是无内嵌凭据的 HTTP 或 HTTPS 地址。')
+    return value
+
 
 def validate_date(value):
     _text(value)
@@ -74,8 +96,6 @@ def normalize_metadata(document):
     result.setdefault('creators', legacy_creators(result.get('authors', '')))
     for field in BIB_FIELDS:
         result.setdefault(field, '')
-    result.setdefault('abstract', '')
-    result.setdefault('url', '')
     return result
 
 def retained_metadata_fields(document):
@@ -89,11 +109,10 @@ def metadata_patch(document, patch):
     for field in BIB_FIELDS:
         if field in patch:
             _text(patch[field])
-    for field in ('abstract', 'url'):
-        if field in patch:
-            _text(patch[field])
     if 'date' in patch:
         validate_date(patch['date'])
+    if 'url' in patch:
+        validate_metadata_url(patch['url'])
     result.update(patch)
     if 'creators' in patch:
         result['creators'] = validate_creators(patch['creators'])
@@ -120,7 +139,10 @@ def exchange_metadata(document, format):
     year = issued[:4] if issued else ''
     creators = validate_creators(doc['creators'])
     if format == 'csl-json':
-        item = dict(id=doc['id'], type=CSL_TYPES.get(kind, kind), title=doc['title'])
+        item = dict(id=doc['id'], type='article' if kind == 'arxiv-preprint' else kind, title=doc['title'])
+        if kind == 'arxiv-preprint':
+            # Standard CSL type plus explicit identity extension; 标准 CSL 类型与显式身份扩展。
+            item['polyscholar-item-type'] = kind
         for role in ('author', 'editor'):
             names = []
             for creator in creators:
@@ -128,23 +150,21 @@ def exchange_metadata(document, format):
                     names.append({'literal': creator['literal']} if creator['literal'] else {k: creator[k] for k in ('family', 'given') if creator[k]})
             if names:
                 item[role] = names
-        mapping = {'publicationTitle':'container-title', 'publisher':'publisher', 'place':'publisher-place', 'volume':'volume', 'issue':'issue', 'pages':'page', 'isbn':'ISBN', 'edition':'edition', 'eventTitle':'event-title', 'institution':'publisher', 'thesisType':'genre'}
+        mapping = {'publicationTitle':'container-title', 'publisher':'publisher', 'place':'publisher-place', 'volume':'volume', 'issue':'issue', 'pages':'page', 'isbn':'ISBN', 'edition':'edition', 'eventTitle':'event-title', 'institution':'publisher', 'thesisType':'genre', 'url':'URL', 'abstract':'abstract'}
         for source, target in mapping.items():
             if source in fields:
                 item[target] = fields[source]
         if doc.get('doi'):
             item['DOI'] = doc['doi']
-        if doc.get('url'):
-            item['URL'] = doc['url']
-        if doc.get('abstract'):
-            item['abstract'] = doc['abstract']
         if issued:
             item['issued'] = {'date-parts': [[int(p) for p in issued.split('-')]]}
         return json.dumps([item], ensure_ascii=False, indent=2)
     if format == 'bibtex':
-        entry = BIBTEX_TYPES[kind]
+        entry = {'article-journal':'article', 'paper-conference':'inproceedings', 'book':'book', 'thesis':'phdthesis', 'arxiv-preprint':'misc'}[kind]
         # Generic theses do not assert a doctorate; BibTeX uses @misc + type.
         # 普通学位论文不推断博士学位；BibTeX 用 @misc + type，CSL/RIS 保留论文类型。
+        if kind == 'thesis':
+            entry = 'misc'
         values = [('title', _bib(doc['title']))]
         for role in ('author', 'editor'):
             names = []
@@ -156,26 +176,30 @@ def exchange_metadata(document, format):
                         names.append('{' + _bib(creator['family']) + '}' + (', {' + _bib(creator['given']) + '}' if creator['given'] else ''))
             if names:
                 values.append((role, ' and '.join(names)))
-        mapping = {'publicationTitle':'journal' if kind == 'article-journal' else 'booktitle', 'publisher':'publisher', 'place':'address', 'volume':'volume', 'issue':'number', 'pages':'pages', 'isbn':'isbn', 'edition':'edition', 'eventTitle':'eventtitle', 'institution':'school', 'date':'date'}
+        mapping = {'publicationTitle':'journal' if kind == 'article-journal' else 'booktitle', 'publisher':'publisher', 'place':'address', 'volume':'volume', 'issue':'number', 'pages':'pages', 'isbn':'isbn', 'edition':'edition', 'eventTitle':'eventtitle', 'institution':'school', 'date':'date', 'url':'url', 'abstract':'abstract'}
         values += [(target, _bib(fields[source])) for source, target in mapping.items() if source in fields]
         if kind == 'thesis':
             values.append(('type', _bib(fields.get('thesisType') or 'Thesis')))
+            # 通用 @misc 不推断学位；显式标记保证本软件回读时保留论文类型。
+            # Generic @misc must not imply a degree; an explicit marker preserves thesis round trips.
+            values.append(('polyscholaritemtype', 'thesis'))
+        if kind == 'arxiv-preprint':
+            values.append(('polyscholaritemtype', 'arxiv-preprint'))
+            values.append(('archiveprefix', 'arXiv'))
         if year:
             values.append(('year', year))
         if doc.get('doi'):
             values.append(('doi', _bib(doc['doi'])))
-        if doc.get('url'):
-            values.append(('url', _bib(doc['url'])))
-        if doc.get('abstract'):
-            values.append(('abstract', _bib(doc['abstract'])))
         return '@' + entry + '{polyscholar_' + re.sub(r'[^A-Za-z0-9_]', '_', doc['id']) + ',\n' + ',\n'.join('  ' + key + ' = {' + value + '}' for key, value in values) + '\n}\n'
     if format == 'ris':
-        lines = ['TY  - ' + RIS_TYPES[kind], 'TI  - ' + _line(doc['title'])]
+        lines = ['TY  - ' + {'article-journal':'JOUR', 'paper-conference':'CPAPER', 'book':'BOOK', 'thesis':'THES', 'arxiv-preprint':'UNPB'}[kind], 'TI  - ' + _line(doc['title'])]
         for creator in creators:
             name = creator['literal'] or creator['family'] + (', ' + creator['given'] if creator['given'] else '')
             lines.append(('AU' if creator['role'] == 'author' else 'A2') + '  - ' + _line(name))
-        mapping = {'publicationTitle':'T2', 'publisher':'PB', 'place':'CY', 'volume':'VL', 'issue':'IS', 'isbn':'SN', 'edition':'ET', 'eventTitle':'T3', 'institution':'PB', 'thesisType':'M3'}
+        mapping = {'publicationTitle':'T2', 'publisher':'PB', 'place':'CY', 'volume':'VL', 'issue':'IS', 'isbn':'SN', 'edition':'ET', 'eventTitle':'T3', 'institution':'PB', 'thesisType':'M3', 'url':'UR', 'abstract':'AB'}
         lines += [target + '  - ' + _line(fields[source]) for source, target in mapping.items() if source in fields]
+        if kind == 'arxiv-preprint':
+            lines.append('M3  - arxiv-preprint')
         if fields.get('pages'):
             match = re.fullmatch(r'([^\s-]+)\s*[-–]\s*([^\s-]+)', fields['pages'])
             lines += ['SP  - ' + _line(match[1]), 'EP  - ' + _line(match[2])] if match else ['SP  - ' + _line(fields['pages'])]
@@ -185,9 +209,5 @@ def exchange_metadata(document, format):
             lines.append('DA  - ' + issued.replace('-', '/'))
         if doc.get('doi'):
             lines.append('DO  - ' + _line(doc['doi']))
-        if doc.get('url'):
-            lines.append('UR  - ' + _line(doc['url']))
-        if doc.get('abstract'):
-            lines.append('AB  - ' + _line(doc['abstract']))
         return '\n'.join([*lines, 'ER  -']) + '\n'
     raise ValueError('不支持的元数据格式。')
