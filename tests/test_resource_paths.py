@@ -18,7 +18,7 @@ class ResourcePathTests(unittest.TestCase):
                 self.assertEqual(resource_paths.resource_path('rubrics'), rubric)
 
     def test_invalid_resource_name_is_rejected(self):
-        for name in ('../library.sqlite3', '/tmp/secret'):
+        for name in ('../library.sqlite3', '/tmp/secret', r'C:\secret', 'C:secret', r'\\host\share\secret', r'..\secret'):
             with self.assertRaises(ValueError):
                 resource_paths.resource_path(name)
 

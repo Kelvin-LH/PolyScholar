@@ -2,6 +2,7 @@
 """MCP policy and structured errors / MCP 策略及结构化错误。"""
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -64,6 +65,45 @@ class McpDesignTests(unittest.TestCase):
             result = self.bridge.execute(['list'])
         self.assertEqual(result['error_code'], 'timeout')
         self.assertNotIn('private', str(result))
+
+    def test_real_child_utf8_is_independent_of_host_encoding(self):
+        from integrations.engines import limited_environment
+        from polyscholar.service import LocalService
+        service = LocalService(self.root / 'chosen')
+        try:
+            source = self.root / 'paper.pdf'
+            source.write_bytes(b'%PDF-1.7 synthetic encoding regression')
+            document = service.import_pdf(source)
+            service.update_document(document['id'], {'title': '研究文献 编码检查'})
+        finally:
+            service.close()
+        # Emulate Windows non-UTF8 pipes / 模拟 Windows 非 UTF8 输出管道。
+        environment = dict(limited_environment(), PYTHONIOENCODING='cp1252:backslashreplace',
+                           PYTHONUTF8='0')
+        with patch('polyscholar.mcp_bridge.limited_environment', return_value=environment.copy()):
+            result = self.bridge.execute(['list', '--json'])
+        self.assertTrue(result['success'])
+        self.assertIn('研究文献', result['stdout'])
+        self.assertEqual(result['data'][0]['title'], '研究文献 编码检查')
+        standalone = subprocess.run([sys.executable, '-m', 'polyscholar.cli',
+            '--data-dir', str(self.root / 'chosen'), 'list', '--json'],
+            env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        self.assertEqual(standalone.returncode, 0)
+        self.assertIn('研究文献', standalone.stdout.decode('utf-8'))
+        holder = LocalService(self.root / 'chosen')
+        try:
+            with patch('polyscholar.mcp_bridge.limited_environment', return_value=environment.copy()):
+                result = self.bridge.execute(['jobs', '--json'])
+            standalone = subprocess.run([sys.executable, '-m', 'polyscholar.cli',
+                '--data-dir', str(self.root / 'chosen'), 'jobs', '--json'],
+                env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            self.assertEqual(standalone.returncode, 2)
+            self.assertIn('已在运行', standalone.stderr.decode('utf-8'))
+        finally:
+            holder.close()
+        self.assertEqual(result['error_code'], 'library_busy')
+        self.assertEqual(result['exit_code'], 2)
+        self.assertIn('关闭', result['stderr'])
 
     def test_frozen_desktop_cannot_be_misreported_as_stdio_cli(self):
         with patch('polyscholar.mcp_bridge.sys.frozen', True, create=True), patch('polyscholar.mcp_bridge.run_captured') as run:

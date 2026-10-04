@@ -38,3 +38,7 @@ main 有 32 个独有提交；功能分支有 3 个。合并保留双方历史�
 实际 stdio 握手验证 tools/list、resources/list/read 与 structuredContent；Windows/中文/空格路径数组、目录覆盖及缩写、非法 Unicode、只读拒绝、库占用和超时专项通过。wheel 已检查包含契约与量表资源，资源路径回归通过；这不是冻结 MCP 伴随程序的验收。
 
 最终 390 项回归（8 平台限定跳过）及原生 UI 检查通过。GitHub 提交及 CI 结果随实际推送补记。
+
+整合已推送 `41e50c5`，main `26695b9` 是其祖先。[首轮 CI](https://github.com/Kelvin-LH/PolyScholar/actions/runs/37184784007) 发现 Windows 编码、根路径和活动锁测试问题；修复证据见整改文档。中文输出及库占用错误已在强制 cp1252 的真实子进程中复现并回归，原生导出检查改为显式 UTF-8；三平台 CI 重跑结果以实际运行结果为准。
+
+Windows 整改后的本机完整回归为 391 项 / 38.232 秒，8 项平台限定跳过；新增原生流程与资源校验通过。

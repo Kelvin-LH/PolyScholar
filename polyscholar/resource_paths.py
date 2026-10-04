@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Locate trusted shipped documentation / 定位随软件分发的可信文档资源。"""
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import sys
 
 
@@ -9,7 +9,10 @@ def resource_path(relative):
     源码、wheel 和冻结资源使用同一定位规则，不读取任意用户资料路径。
     """
     item = Path(relative)
-    if item.is_absolute() or '..' in item.parts:
+    windows_item = PureWindowsPath(relative)
+    # Reject rooted/drive paths on every host, including Windows drive-relative forms.
+    # 在所有系统拒绝根路径、盘符及盘符相对路径，防止跨平台定位越界。
+    if item.anchor or windows_item.anchor or '..' in item.parts or '..' in windows_item.parts:
         raise ValueError('资源名称无效。')
     roots = []
     if getattr(sys, 'frozen', False):

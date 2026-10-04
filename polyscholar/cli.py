@@ -977,7 +977,20 @@ def build_parser():
     p.set_defaults(func=cmd_status)
     return parser
 
+
+def _configure_stdio():
+    """CLI output uses UTF8 even on redirected Windows pipes.
+
+    即使 Windows 使用重定向管道，CLI 输出仍为 UTF8；不改变测试注入流。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        configure = getattr(stream, 'reconfigure', None)
+        if callable(configure):
+            configure(encoding='utf-8', errors='backslashreplace')
+
+
 def main(argv=None, service=None):
+    _configure_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     owned = service is None

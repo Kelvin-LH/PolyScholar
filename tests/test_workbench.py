@@ -94,6 +94,9 @@ assert all(token not in value for value in os.environ.values())
             self.service.export_translation(job['id'], 0, self.service.store.root / 'private.html')
         # Scan only this disposable fixture; never inspect actual user data.
         # 只扫描本测试临时夹具，绝不读取真实用户文献或凭据。
+        # Windows byte-range locks prevent reading the live instance lock.
+        # Windows 字节锁阻止读取活动实例锁；关库后扫描完整目录，不跳过文件。
+        self.service.close()
         for path in self.root.rglob('*'):
             if path.is_file():
                 self.assertNotIn(self.token.encode(), path.read_bytes(), str(path.relative_to(self.root)))

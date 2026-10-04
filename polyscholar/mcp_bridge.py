@@ -136,6 +136,10 @@ class CliBridge:
 
     def run(self, command, *, operation=None):
         environment = limited_environment()
+        # Protocol bytes must not depend on Windows locale or caller settings.
+        # 协议字节不依赖 Windows 区域编码或调用方环境设置。
+        environment['PYTHONIOENCODING'] = 'utf-8'
+        environment['PYTHONUTF8'] = '1'
         for name in ('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy',
                      'no_proxy', 'POLYSCHOLAR_RUBRICS_DIR', 'POLYSCHOLAR_CLI_MD'):
             if name in os.environ:

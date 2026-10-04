@@ -95,7 +95,7 @@ def main():
             with patch.object(QFileDialog, 'getSaveFileName', return_value=(str(exported), '')):
                 dialog._export()
                 wait_for(lambda : window.io_worker is None and (not dialog._busy))
-            assert json.loads(exported.read_text())['paper']['score'] == 84 and '已导出' in dialog.status.text()
+            assert json.loads(exported.read_text(encoding='utf-8'))['paper']['score'] == 84 and '已导出' in dialog.status.text()
             protected = service.store.root / 'library.sqlite3'
             with patch.object(QFileDialog, 'getSaveFileName', return_value=(str(protected), '')):
                 dialog._export()
@@ -142,7 +142,7 @@ def main():
             target = root / 'exported.html'
             with patch.object(QFileDialog, 'getSaveFileName', return_value=(str(target), '')):
                 window.export_translation(job)
-            assert target.read_text() == html
+            assert target.read_text(encoding='utf-8') == html
             # A genuine local HTML artifact is readable without inventing a PDF.
             # 无 PDF 条目读取实际 HTML 产物，不创建或冒用 PDF 身份。
             fileless = service.create_bibliographic_item({
@@ -173,7 +173,7 @@ def main():
             fileless_export = root / 'fileless-export.html'
             with patch.object(QFileDialog, 'getSaveFileName', return_value=(str(fileless_export), '')):
                 window.export_translation(fileless_job)
-            assert fileless_export.read_text() == fileless_html
+            assert fileless_export.read_text(encoding='utf-8') == fileless_html
             window.pages.setText('1-2')
             window.task_mode.setCurrentIndex(window.task_mode.findData('html-llm'))
             assert not window.pages.isEnabled() and (not window.pages.text())
