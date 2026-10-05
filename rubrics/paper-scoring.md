@@ -1,6 +1,8 @@
 # 论文评分量化打分文档
 
-版本：1.0.0。总分：100。对象：以 arXiv 预印本为主的研究论文。
+版本：1.1.0。总分：100。对象：以 arXiv 预印本为主的研究论文。
+
+本版保留五维权重与连续条件计分，修订 D1–D3、E3 和分项复核。旧版记录保留原版本，不自动重评分；不同版本分数不能直接当作同一尺度比较。本版未经过真实模型跨领域校准，分数不是贡献的绝对排名。
 
 执行本文件的明示规则；禁止自行加入会议档次、作者名望、个人研究偏好等标准。本量表评估**给定材料所支持的贡献与证据质量**，不把作者的“首次”声明当作已完成全球文献查新。评分不是录用决定。
 
@@ -20,13 +22,13 @@
 
 评分前由协调者冻结同一材料包：论文精确版本、完整主文及作者附录、本量表、材料清单。记录各文件 SHA-256；禁止三个 agent 各自下载不同版本。外部前作、代码或复现报告若纳入，必须事先以相同快照提供给三者；引用目录不是已读取的前作全文。
 
-材料清单同时冻结：主要贡献/结论列表、作者声称比较或替代的工作集合、证据类型、主要指标及实际意义阈值的原文位置。协调者只摘取这些事实，不提供评分、档次或优劣判断。主要结论取摘要、引言贡献列表、结论中可检验的研究主张；排除背景介绍与愿景。若清单漏掉中心主张，先统一补正材料再开始盲评。
+材料清单同时冻结：主要贡献/结论列表、作者声称比较或替代的工作集合、证据类型、主要指标及实际意义依据的原文位置。协调者只摘取这些事实，不提供评分、档次或优劣判断。主要结论取摘要、引言贡献列表、结论中可检验的研究主张；排除背景介绍与愿景。若清单漏掉中心主张，先统一补正材料再开始盲评。
 
 - **最接近工作**：论文明确说明其与本研究共享问题、方法机制或关键假设，并给出对应内容；名称或知名度不构成依据。若没有共同前作全文，只能评价论文给出的具体比较，不宣称已独立核验前作。
 - **强基线**：冻结比较集合中，已报告结果在主要指标上最优的既有方案，连同最接近方案；多指标各有最优时均须纳入。SOTA 需有可核对的比较来源，不根据名称或模型记忆认定，也不据此宣称覆盖全部领域工作。
 - **实质差异**：改变目标、假设、表示、算子、信息流或可实现行为；仅命名、符号、参数值变化不算实质差异。
 - **主要指标**：材料清单冻结的、直接对应主要结论的指标；不得事后只挑获胜指标。资源成本在论文把效率列为贡献时也是主要指标。
-- **实际意义阈值**：作者在方法/实验协议中明确给出的最小有意义改进、非劣界限、风险上限、预算或等效界限。不得由 agent 自造“提升 1% 就有意义”等阈值；只有结果后解释、未定义阈值的，不能满足 E3 第 4 条。
+- **实际意义依据**：盲评前冻结 `effect_context`：`application`（实际应用）、`method`（方法/探索）、`theoretical`（纯理论）或 `mixed`（跨类型）。按主要主张分类，不因缺少阈值改称方法论文。应用主张涉及部署、安全、临床或业务收益，E3.4 须有方法/协议中给出的最小有意义改进、非劣/等效界限、风险上限或预算及联合判定规则。方法主张可使用具体的性能—资源权衡、可达到规模或可完成任务作为意义依据，但须报告相应约束、对照和指标；只称“提升很大”不成立。将各主张、路径和原文位置登记在 `meaningfulness_basis`；未报告可为空。不得由 agent 自造数值阈值、以事后挑选的获胜指标代替主要指标，或把方法对照当作应用收益证明。
 - **独立评测环境**：来源、采集条件、任务或总体不同的评测集合；同一数据集随机重划分、三个随机种子不是三个环境。**分层**须按任务相关因素定义并分别报告样本数与结果，不能按模型是否成功事后分组。
 - **机制不同的变动**：改变不同因素类别，例如输入噪声、总体/环境变化、资源预算或关键假设；同一因素的两个强度、两个随机种子只算一种。
 - **公平比较**：输入信息、训练/测试划分、预处理、评测协议及资源预算相同，或差异逐项披露并给出可比较的匹配预算结果。不同预算的一张排行榜不能单独证明公平。
@@ -45,7 +47,7 @@
 
 | 档次 | 总分区间 | 可观察的锚点 |
 | --- | ---: | --- |
-| 卓越 | 80–100 | 20 个条目合计至少 80 个连续条件有证据；均衡锚点为每条均达到第 4 条，总分 80，包括明确技术差异、公平预算、量化意义阈值及完整结论映射 |
+| 卓越 | 80–100 | 20 个条目合计至少 80 个连续条件有证据；均衡锚点为每条均达到第 4 条，总分 80，包括明确技术差异、公平预算、研究类型适用的意义依据及完整结论映射 |
 | 优秀 | 60–79 | 合计 60–79 个连续条件有证据；均衡锚点为每条达到第 3 条，总分 60，包括可定位的近邻比较、逐项技术差异、明确评测划分与主要定量结果 |
 | 合格 | 40–59 | 合计 40–59 个连续条件有证据；均衡锚点为每条达到第 2 条，总分 40，已有问题定义、方法载体和样本/协议描述，但后续验证条件未全部满足 |
 | 欠缺 | 20–39 | 合计 20–39 个连续条件有证据；均衡锚点为每条仅达到第 1 条，总分 20，报告贡献声明、基础比较和结果，但缺少后续可核对细节 |
@@ -58,8 +60,8 @@
 | 维度 | 卓越 | 优秀 | 合格 | 欠缺 | 严重缺失 |
 | --- | --- | --- | --- | --- | --- |
 | 创新点 /25 | **20–25**；锚点 `(4,4,4,4,4)`：具体差异、近邻匹配、贡献边界和判定规则均明确 | **15–19**；`(3,3,3,3,3)`：贡献类型、近邻机制、技术差异和检验对象均可定位 | **10–14**；`(2,2,2,2,2)`：输入输出、近邻理由、技术载体与引用已有记录 | **5–9**；`(1,1,1,1,1)`：有问题、前作名称、改动声明和检验主张 | **0–4**；不足 5 个连续条件，尚未形成可对照的贡献说明 |
-| 创新程度 /20 | **16–20**；`(4,4,4,4)`：明确形式变化、新核心结构、新能力与两个不同问题的推导 | **12–15**；`(3,3,3,3)`：有新算子/路径、非平凡交互、能力联系和通用规则 | **8–11**；`(2,2,2,2)`：定位机制改变、接口关系、约束与适用条件 | **4–7**；`(1,1,1,1)`：有改变、组成、能力目标及单个适用场景 | **0–3**；不足 4 个连续条件，不能支持改变层次判断 |
-| 实际效果 /40 | **32–40**；`(4,4,4,4,4,4,4,4)`：强基线、代表性覆盖、意义阈值、区间估计、稳健性与复现配置均可查 | **24–31**；`(3,3,3,3,3,3,3,3)`：公平协议、分层或多环境、完整主要差值、重复/区间和关键消融均可查 | **16–23**；`(2,2,2,2,2,2,2,2)`：主要基线/样本/指标/控制条件有记录，证据强度的后续条件不足 | **8–15**；`(1,1,1,1,1,1,1,1)`：基本结果存在，公平性、覆盖或复现条件未形成闭合证据链 | **0–7**；不足 8 个连续条件，主要效果只能获得零散支持 |
+| 创新程度 /20 | **16–20**；`(4,4,4,4)`：明确形式变化、机制差异、新能力与两个不同问题的推导 | **12–15**；`(3,3,3,3)`：有新算子/路径、非平凡交互、能力联系和通用规则 | **8–11**；`(2,2,2,2)`：定位机制改变、接口关系、约束与适用条件 | **4–7**；`(1,1,1,1)`：有改变、组成、能力目标及单个适用场景 | **0–3**；不足 4 个连续条件，不能支持改变层次判断 |
+| 实际效果 /40 | **32–40**；`(4,4,4,4,4,4,4,4)`：强基线、代表性覆盖、适用的意义依据、区间估计、稳健性与复现配置均可查 | **24–31**；`(3,3,3,3,3,3,3,3)`：公平协议、分层或多环境、完整主要差值、重复/区间和关键消融均可查 | **16–23**；`(2,2,2,2,2,2,2,2)`：主要基线/样本/指标/控制条件有记录，证据强度的后续条件不足 | **8–15**；`(1,1,1,1,1,1,1,1)`：基本结果存在，公平性、覆盖或复现条件未形成闭合证据链 | **0–7**；不足 8 个连续条件，主要效果只能获得零散支持 |
 | 方法严谨性 /10 | **8–10**；`(4,4)`：关键流程闭合，有具体威胁控制及结果/论证 | **6–7**；`(3,3)`：假设、关键步骤、适用边界及控制方式明确 | **4–5**；`(2,2)`：符号/步骤及威胁影响已有对应说明 | **2–3**；`(1,1)`：有方法载体与风险/假设声明 | **0–1**；主要方法或有效性威胁尚不可核对 |
 | 清晰度 /5 | **4–5**：每项主要结论能追踪至证据，引用定位有效 | **3**：问题、方法、结果可定位，主符号/指标已定义 | **2**：问题、方法、结果均有可定位段落 | **1**：只能定位核心问题或贡献声明 | **0**：完整读取后仍不能定位核心问题/贡献 |
 
@@ -89,15 +91,15 @@ N 项评价“差异是否被定义”，不按性能提升幅度加分；其测
 
 | 条目 | 第 1 条 | 第 2 条 | 第 3 条 | 第 4 条 | 第 5 条 |
 | --- | --- | --- | --- | --- | --- |
-| D1 改变层次 | 存在明确技术改变 | 定位目标、假设、表示、推理/学习过程的改变，超出参数值变化 | 给出新的算子、决策路径或形式化目标 | 明确改变了既有问题形式、关键假设或表示结构 | 给出在所述约束下既有框架无法表达、而新框架能表达的具体构造 |
-| D2 非平凡结构 | 说明核心组成 | 给出组件接口及依赖关系 | 新交互/耦合有明确计算规则，区别于直接串联/加权 | 定义新核心操作或原语，超出已有组件重排 | 通过可核对的推导/构造说明，该原语不能由文中明确列出的既有操作直接替代 |
-| D3 能力边界 | 指明改变所针对的能力 | 明确该能力的输入条件与资源/适用约束 | 把技术改变与新增功能、性质或权衡连接 | 指定近邻方法在同约束下不具备的功能/性质 | 给出同约束下“旧方案不具备、新方案具备”的构造或形式论证，而非仅更高平均分 |
+| D1 改变层次 | 存在明确技术改变 | 定位目标、假设、表示、推理/学习过程的改变，超出参数值变化 | 给出明确的新算子、信息/梯度路径、学习机制或形式化目标 | 解释该机制如何改变问题形式、关键假设、表示结构或学习障碍；定位机制推导或匹配对照 | 以构造/证明说明表达能力改变，或以匹配近邻的机制对照说明原障碍被缓解；对照排除单纯容量/预算增加，结论限定于验证范围 |
+| D2 非平凡结构 | 说明核心组成 | 给出组件接口及依赖关系 | 新交互/耦合有明确计算规则，区别于未定义交互的直接拼接 | 定位该交互如何改变计算或学习行为，给出与简单串联/加权/重排方案的机制差异 | 以推导/构造或匹配预算的消融/替换对照区分该交互与明确的简单替代；不能只凭命名、实现更贵或更高平均分判断不可替代 |
+| D3 能力边界 | 指明改变所针对的能力 | 明确该能力的输入条件与资源/适用约束 | 把技术改变与新增功能、性质或性能—资源权衡连接 | 在同约束下以形式结果或匹配对照展示近邻的限制与本方法可达到的能力，如可训练规模、稳定性或效率；不能只报排行榜更高分 | 以形式论证，或至少两个独立环境或两个资源规模的匹配对照支持该边界变化，并检查容量/预算等替代解释；明确旧方案限制及新方案失效范围 |
 | D4 原理范围 | 有一个明确适用场景 | 给出适用条件及保持不变的核心规则 | 将规则表述为超出单个数据集/实例的机制或命题 | 从同一规则推导至少两个问题形式/关键假设不同的应用 | 给出一般形式到具体情形的推导，并明确既有情形是否为特例及其成立条件 |
 
 **创新类型判据**（仅作标签，不另外加减分；依下列顺序判定）：
 
-1. **开创性贡献候选**：`(D1=5 或 D2=5) 且 D3=5 且 D4≥3`。必须定位形式/原语变化、旧方案能力限制及一般规则。仅在冻结比较集合内成立，不写成“全球首创已证实”。
-2. **组合式创新**：不满足第 1 项，且 `D2=3`。有新的接口交互规则，但尚未达到新原语条件；直接拼接不满足此项。
+1. **开创性贡献候选**：`(D1=5 或 D2=5) 且 D3=5 且 D4≥3`。必须定位机制变化、旧方案能力限制及一般规则；可用形式或实验路径，均须满足连续条件。仅在冻结比较集合内成立，不写成“全球首创已证实”。
+2. **组合式创新**：不满足第 1 项，且 `D2=3`。有新的接口交互规则，但机制区分的后续条件尚不足；直接拼接不满足此项。
 3. **渐进式改进**：不满足前两项，且 `1≤D1≤3、D2≤2、D3≤3`。保留主要问题形式/能力范围，改进已有框架中的环节；没有明确改变不能仅因列出组成而获此标签。
 4. **混合类型或证据不足**：其余情况；说明未满足哪个判据，不强迫三选一。新问题配已有方法、新原语配局部功能等允许落入此类。
 
@@ -109,7 +111,7 @@ N 项评价“差异是否被定义”，不按性能提升幅度加分；其测
 | --- | --- | --- | --- | --- | --- |
 | E1 公平基线 | 有本方法与至少一个基线的同指标数值 | 包含指定的最接近方法和简单参照/控制 | 训练/测试划分、输入和评测协议可核对且一致，或有匹配对照 | 强基线的版本/配置可查，训练、调参和推理预算相同或有匹配预算结果 | 对所有主要比较逐项披露资源/实现差异；作者声称超越的路线均有可比结果或明确排除该主张 |
 | E2 规模与代表性 | 明确评测来源及测试样本数 | 披露训练/验证/测试数量或采样程序及对象范围 | 至少两个独立环境，或一个环境含至少三个按任务因素定义并分别报告的分层 | 报告这些环境/分层的样本数、结果和与主要主张的对应关系 | 增加一个独立来源/条件的保留评测，且覆盖所声称的关键总体/条件，并披露未覆盖范围 |
-| E3 效果与实际意义 | 报告主要对照的原始结果及指标方向 | 单位、分母和资源约束明确 | 对全部主要指标计算绝对差值及适用时的相对差值，同时披露退化/成本 | 给出第 1.1 节定义的实际意义阈值及主张成立的联合判定规则 | 公平对照结果满足该规则；所有主要约束同时达标，不能用一个指标的提升掩盖另一个约束失败 |
+| E3 效果与实际意义 | 报告主要对照的原始结果及指标方向 | 单位、分母和资源约束明确 | 对全部主要指标计算绝对差值及适用时的相对差值，同时披露退化/成本 | 应用主张提供第 1.1 节的预定义阈值及联合判定规则；方法主张提供具体性能—资源、规模或任务能力的意义依据及匹配对照；不能仅称提升很大 | 公平对照支持该路径的主张，所有主要约束同时满足且披露适用边界；无预定义阈值的方法结果只支持方法能力，不外推部署收益 |
 | E4 不确定性 | 明确结果来自单次还是重复试验 | 给出样本数/重复数及不确定性的计算单位 | 至少三次独立重复并报告离散程度，或固定测试集提供区间估计并明确采样单位、计算方法及重采样次数（若使用重采样） | 对主要方法差值报告区间/检验，说明配对方式、置信水平及适用假设 | 据区间/检验判断主张是否成立；存在多个确认性比较时说明控制/预指定方式，不以单次最佳值替代 |
 | E5 稳健性与边界 | 有主评测以外的边界/变动条件结果 | 定义变动因素和范围，报告所有该实验条件 | 至少一种针对中心主张的扰动、分布变化或边界条件 | 至少两种机制不同的变动，分别给结果、样本数及失效/退化情况 | 将失效条件写入适用范围，并以这些结果支持所声称的稳健区间而非只报成功子集 |
 | E6 消融与归因 | 有移除、替换或控制因素的结果 | 明确每个控制具体改变什么、保持什么不变 | 每个中心新增组件/因素都有单独控制，预算及其他条件匹配 | 增加可区分关键交互或替代解释的控制；单一组件研究可控制容量、训练预算、数据或简单替代法 | 依据这些控制逐项判断归因，报告不支持归因的结果，且不把同时改变多项因素的对照当单因素证据 |
@@ -123,6 +125,8 @@ N 项评价“差异是否被定义”，不按性能提升幅度加分；其测
 协调者在盲评前冻结 `empirical`（实验）、`theoretical`（全部中心主张为演绎命题）或 `mixed`（两者都有）。纯理论论文按下表替换 E1–E6、E8；E7 使用上表，将“结果/指标/实验”读作“定理/界/证明”。没有数据集、随机种子或手写证明代码，不构成理论论文失分理由。
 
 每行同样按第 1→5 条连续计分；不是任取若干条件。混合论文分别对实验主张和理论主张使用对应条件，**同一 E 条目取两类所得分的较小值**，不重复加分、不修改权重。
+
+`evidence_mode` 区分实验/理论证据，`effect_context` 区分实际意义路径，二者用途不同。存在应用及方法主张时，E3 对每个主要主张使用其已冻结的路径，取各主张得分的最小值；不能用方法收益掩盖应用主张的缺口。纯理论 E3 使用下表的等价条件，并记录命题及原文依据。
 
 | 条目 | 理论等价条件：依次为第 1、2、3、4、5 条 |
 | --- | --- |
@@ -182,17 +186,18 @@ N 项评价“差异是否被定义”，不按性能提升幅度加分；其测
 
 最终 `dimensions`、`strengths`、`weaknesses` 使用总分等于中位数的那一位代理的完整结果，确保维度和等于总分；若并列，固定优先顺序 A、B、C。不得把五个维度各自的中位数拼成一个与最终总分不相等的向量。标明该向量是代表评分，而不是五维分别达成共识。
 
-`sub_scores` 按 A、B、C 固定顺序保留完整评分。`original_output` 保存首轮完整 JSON 原文；复核后也不能覆盖。展示汇总报告时，必须同时展示三份首轮原文，复核发生时另展示三份复核原文；不得只呈现总分或三行摘要。JSON 内的原文字段必须完整，不能写“见附件”代替。
+`sub_scores` 按 A、B、C 固定顺序保留完整评分。`original_output` 保存首轮完整 JSON 对象（不删减字段）；复核后也不能覆盖。展示汇总报告时，必须同时展示三份首轮原文，复核发生时另展示三份复核原文；不得只呈现总分或三行摘要。JSON 内的原文字段必须完整，不能写“见附件”代替。
 
-### 4.3 极差超过 10 分时复核
+### 4.3 总分或关键分项分歧时复核
 
-- 首轮极差 **>10** 必须复核；等于 10 不自动触发。协调者定位条目分歧，对三个代理发送相同的待复核条目编号及相关原文位置，不透露分数、排名或期望结论。
+- 首轮总分极差 **>10**，或任一关键条目 `D1、D2、D3、D4、E1、E3、E4、E6、E7` 的 0–5 分极差 **≥2**，必须复核。总分等于 10、条目极差等于 1 本身不触发。关键条目覆盖机制深度、公平比较、实际意义、不确定性、归因和结论范围；两分门槛是预设的一致性流程规则，未经过统计校准，也不证明小分歧的评分正确。协调者只向三个代理发送相同的待复核编号及原文位置，不透露分数、排名或期望结论。
 - 复核指令模板：
 
 > 本轮需复核条目：{条目编号}；对应材料位置：{位置}。请重新核对这些条目的五个连续条件和证据，并自检所有加总。不要猜测其他代理的评分，不要以缩小分歧为目标。只按 paper-scoring.md 纠正不符合条文的判断，重新输出完整 agent_report，并在 rationale 中说明维持或改变的依据。
 
 - 完成一轮独立复核后，以三份**复核后的有效总分**重新取中位数、计算极差。设置 `rechecked=true`，保存三份首轮与复核原文；不能只复核低分者或丢弃离群分。
-- 若复核后极差仍 >10，仍输出该中位数，同时设置 `unresolved_disagreement=true`，说明分歧条目；不强行“协商统一”，不无限复核。若无法取得三份有效复核，报告流程未完成，不能把首轮中位数冒充最终复核结果。
+- 若复核后总分极差仍 >10 或关键条目极差仍 ≥2，仍输出该中位数，同时设置 `unresolved_disagreement=true`，说明分歧条目；不强行“协商统一”，不无限复核。若无法取得三份有效复核，报告流程未完成，不能把首轮中位数冒充最终复核结果。
+- 即使三位代理同意，也须检查高分理由是否实际满足条文。D 项不能只引用更高平均分；E1 不能只引用模型名或不同预算榜单；E4 须覆盖主要结果，不能以某个次要实验的重复次数覆盖全部；E7 须核对冻结清单中的每个中心主张。另有置信度报告时，核对其中提到的缺证据主张是否与 E7 理由矛盾；两份量表语义不同，不自动令同名条目同分。
 - 新增材料或修改论文/量表版本会改变材料包，必须重新开启三个隔离首轮，不能只给某一代理补充信息。
 
 ## 5. 跨模型一致性纪律
@@ -215,19 +220,21 @@ N 项评价“差异是否被定义”，不按性能提升幅度加分；其测
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "PaperScoringReport-v1.0.0",
+  "title": "PaperScoringReport-v1.1.0",
   "type": "object",
   "additionalProperties": false,
   "required": ["rubric_version", "manifest", "total", "dimensions", "strengths", "weaknesses", "sub_scores", "aggregation"],
   "properties": {
-    "rubric_version": {"const": "1.0.0"},
+    "rubric_version": {"const": "1.1.0"},
     "manifest": {"$ref": "#/$defs/manifest"},
     "total": {"type": "integer", "minimum": 0, "maximum": 100},
     "dimensions": {"$ref": "#/$defs/dimensions"},
     "strengths": {"$ref": "#/$defs/findings"},
     "weaknesses": {"$ref": "#/$defs/findings"},
     "sub_scores": {
-      "type": "array", "minItems": 3, "maxItems": 3,
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
       "prefixItems": [
         {"allOf": [{"$ref": "#/$defs/sub_score"}, {"properties": {"agent_id": {"const": "A"}}}]},
         {"allOf": [{"$ref": "#/$defs/sub_score"}, {"properties": {"agent_id": {"const": "B"}}}]},
@@ -236,8 +243,20 @@ N 项评价“差异是否被定义”，不按性能提升幅度加分；其测
       "items": false
     },
     "aggregation": {
-      "type": "object", "additionalProperties": false,
-      "required": ["method", "spread", "initial_spread", "rechecked", "rounds", "selected_agent_id", "unresolved_disagreement", "recheck_reason"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "spread",
+        "initial_spread",
+        "rechecked",
+        "rounds",
+        "selected_agent_id",
+        "unresolved_disagreement",
+        "recheck_reason",
+        "initial_critical_items",
+        "critical_items"
+      ],
       "properties": {
         "method": {"const": "median"},
         "spread": {"type": "integer", "minimum": 0, "maximum": 100},
@@ -246,38 +265,53 @@ N 项评价“差异是否被定义”，不按性能提升幅度加分；其测
         "rounds": {"type": "integer", "minimum": 0, "maximum": 1},
         "selected_agent_id": {"enum": ["A", "B", "C"]},
         "unresolved_disagreement": {"type": "boolean"},
-        "recheck_reason": {"type": ["string", "null"]}
+        "recheck_reason": {"type": ["string", "null"]},
+        "initial_critical_items": {"type": "array", "uniqueItems": true, "items": {"enum": ["D1", "D2", "D3", "D4", "E1", "E3", "E4", "E6", "E7"]}},
+        "critical_items": {"type": "array", "uniqueItems": true, "items": {"enum": ["D1", "D2", "D3", "D4", "E1", "E3", "E4", "E6", "E7"]}}
       }
     }
   },
   "$defs": {
     "manifest": {
-      "type": "object", "additionalProperties": false,
-      "required": ["paper_ref", "rubric_sha256", "evidence_mode", "inputs", "main_claims", "comparison_set", "primary_metrics", "meaningful_thresholds"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "paper_ref",
+        "rubric_sha256",
+        "evidence_mode",
+        "inputs",
+        "main_claims",
+        "comparison_set",
+        "primary_metrics",
+        "meaningful_thresholds",
+        "effect_context",
+        "meaningfulness_basis"
+      ],
       "properties": {
         "paper_ref": {"type": "string", "minLength": 1},
         "rubric_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "evidence_mode": {"enum": ["empirical", "theoretical", "mixed"]},
         "inputs": {
-          "type": "array", "minItems": 1,
+          "type": "array",
+          "minItems": 1,
           "items": {
-            "type": "object", "additionalProperties": false,
+            "type": "object",
+            "additionalProperties": false,
             "required": ["source_id", "label", "sha256"],
-            "properties": {
-              "source_id": {"type": "string", "minLength": 1},
-              "label": {"type": "string", "minLength": 1},
-              "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-            }
+            "properties": {"source_id": {"type": "string", "minLength": 1}, "label": {"type": "string", "minLength": 1}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
           }
         },
         "main_claims": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
         "comparison_set": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "primary_metrics": {"type": "array", "items": {"type": "string", "minLength": 1}},
-        "meaningful_thresholds": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        "meaningful_thresholds": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "effect_context": {"enum": ["application", "method", "theoretical", "mixed"]},
+        "meaningfulness_basis": {"type": "array", "items": {"type": "string", "minLength": 1}}
       }
     },
     "evidence": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "required": ["source_id", "locator", "quote", "status"],
       "properties": {
         "source_id": {"type": "string", "minLength": 1},
@@ -285,14 +319,17 @@ N 项评价“差异是否被定义”，不按性能提升幅度加分；其测
         "quote": {"type": ["string", "null"]},
         "status": {"enum": ["observed", "not_reported", "unverifiable"]}
       },
-      "allOf": [{
-        "if": {"properties": {"status": {"const": "observed"}}},
-        "then": {"properties": {"quote": {"type": "string", "minLength": 1}}},
-        "else": {"properties": {"quote": {"type": "null"}}}
-      }]
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "observed"}}},
+          "then": {"properties": {"quote": {"type": "string", "minLength": 1}}},
+          "else": {"properties": {"quote": {"type": "null"}}}
+        }
+      ]
     },
     "criterion": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "required": ["id", "score", "rationale", "evidence"],
       "properties": {
         "id": {"type": "string", "pattern": "^(N[1-5]|D[1-4]|E[1-8]|R[1-2]|C1)$"},
@@ -302,10 +339,12 @@ N 项评价“差异是否被定义”，不按性能提升幅度加分；其测
       }
     },
     "dimension": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "required": ["key", "name", "max", "score", "rationale", "criteria"],
       "properties": {
-        "key": {"type": "string"}, "name": {"type": "string"},
+        "key": {"type": "string"},
+        "name": {"type": "string"},
         "max": {"type": "integer"},
         "score": {"type": "integer", "minimum": 0},
         "rationale": {"type": "string", "minLength": 1},
@@ -313,20 +352,64 @@ N 项评价“差异是否被定义”，不按性能提升幅度加分；其测
       }
     },
     "dimensions": {
-      "type": "array", "minItems": 5, "maxItems": 5,
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
       "prefixItems": [
-        {"allOf": [{"$ref": "#/$defs/dimension"}, {"properties": {"key": {"const": "novelty"}, "name": {"const": "创新点"}, "max": {"const": 25}, "score": {"maximum": 25}, "criteria": {"minItems": 5, "maxItems": 5}}}]},
-        {"allOf": [{"$ref": "#/$defs/dimension"}, {"properties": {"key": {"const": "innovation_degree"}, "name": {"const": "创新程度"}, "max": {"const": 20}, "score": {"maximum": 20}, "criteria": {"minItems": 4, "maxItems": 4}}}]},
-        {"allOf": [{"$ref": "#/$defs/dimension"}, {"properties": {"key": {"const": "effectiveness"}, "name": {"const": "实际效果"}, "max": {"const": 40}, "score": {"maximum": 40}, "criteria": {"minItems": 8, "maxItems": 8}}}]},
-        {"allOf": [{"$ref": "#/$defs/dimension"}, {"properties": {"key": {"const": "rigor"}, "name": {"const": "方法严谨性"}, "max": {"const": 10}, "score": {"maximum": 10}, "criteria": {"minItems": 2, "maxItems": 2}}}]},
-        {"allOf": [{"$ref": "#/$defs/dimension"}, {"properties": {"key": {"const": "clarity"}, "name": {"const": "清晰度"}, "max": {"const": 5}, "score": {"maximum": 5}, "criteria": {"minItems": 1, "maxItems": 1}}}]}
+        {
+          "allOf": [
+            {"$ref": "#/$defs/dimension"},
+            {
+              "properties": {"key": {"const": "novelty"}, "name": {"const": "创新点"}, "max": {"const": 25}, "score": {"maximum": 25}, "criteria": {"minItems": 5, "maxItems": 5}}
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/dimension"},
+            {
+              "properties": {
+                "key": {"const": "innovation_degree"},
+                "name": {"const": "创新程度"},
+                "max": {"const": 20},
+                "score": {"maximum": 20},
+                "criteria": {"minItems": 4, "maxItems": 4}
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/dimension"},
+            {
+              "properties": {"key": {"const": "effectiveness"}, "name": {"const": "实际效果"}, "max": {"const": 40}, "score": {"maximum": 40}, "criteria": {"minItems": 8, "maxItems": 8}}
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/dimension"},
+            {
+              "properties": {"key": {"const": "rigor"}, "name": {"const": "方法严谨性"}, "max": {"const": 10}, "score": {"maximum": 10}, "criteria": {"minItems": 2, "maxItems": 2}}
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/dimension"},
+            {
+              "properties": {"key": {"const": "clarity"}, "name": {"const": "清晰度"}, "max": {"const": 5}, "score": {"maximum": 5}, "criteria": {"minItems": 1, "maxItems": 1}}
+            }
+          ]
+        }
       ],
       "items": false
     },
     "findings": {
       "type": "array",
       "items": {
-        "type": "object", "additionalProperties": false,
+        "type": "object",
+        "additionalProperties": false,
         "required": ["point", "criterion_ids", "evidence"],
         "properties": {
           "point": {"type": "string", "minLength": 1},
@@ -337,12 +420,13 @@ N 项评价“差异是否被定义”，不按性能提升幅度加分；其测
     },
     "report_fields": {
       "type": "object",
-      "required": ["agent_id", "model", "settings", "total", "dimensions", "strengths", "weaknesses", "innovation_type"],
+      "required": ["agent_id", "model", "settings", "total", "dimensions", "strengths", "weaknesses", "innovation_type", "rubric_version", "manifest"],
       "properties": {
         "agent_id": {"enum": ["A", "B", "C"]},
         "model": {"type": "string", "minLength": 1},
         "settings": {
-          "type": "object", "additionalProperties": false,
+          "type": "object",
+          "additionalProperties": false,
           "required": ["temperature", "top_p", "seed"],
           "properties": {
             "temperature": {"type": ["number", "null"], "minimum": 0},
@@ -354,42 +438,39 @@ N 项评价“差异是否被定义”，不按性能提升幅度加分；其测
         "dimensions": {"$ref": "#/$defs/dimensions"},
         "strengths": {"$ref": "#/$defs/findings"},
         "weaknesses": {"$ref": "#/$defs/findings"},
-        "innovation_type": {"enum": ["开创性贡献候选", "组合式创新", "渐进式改进", "混合类型或证据不足"]}
+        "innovation_type": {"enum": ["开创性贡献候选", "组合式创新", "渐进式改进", "混合类型或证据不足"]},
+        "rubric_version": {"const": "1.1.0"},
+        "manifest": {"$ref": "#/$defs/manifest"}
       }
     },
-    "agent_report": {
-      "allOf": [{"$ref": "#/$defs/report_fields"}],
-      "unevaluatedProperties": false
-    },
+    "agent_report": {"allOf": [{"$ref": "#/$defs/report_fields"}], "unevaluatedProperties": false},
     "sub_score": {
-      "allOf": [
-        {"$ref": "#/$defs/report_fields"},
-        {
-          "type": "object", "required": ["original_output", "recheck_output"],
-          "properties": {
-            "original_output": {"type": "string", "minLength": 1},
-            "recheck_output": {"type": ["string", "null"], "minLength": 1}
-          }
-        }
-      ],
-      "unevaluatedProperties": false
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_id", "total", "original_output"],
+      "properties": {
+        "agent_id": {"enum": ["A", "B", "C"]},
+        "total": {"type": "integer", "minimum": 0, "maximum": 100},
+        "original_output": {"$ref": "#/$defs/agent_report"},
+        "recheck_output": {"anyOf": [{"$ref": "#/$defs/agent_report"}, {"type": "null"}]}
+      }
     }
   }
 }
 ```
 
-`settings` 不支持或无法获知的值填 `null`，不得虚报为 0。阈值/比较集合未报告可为空数组，但相应得分条件仍须止步。`paper_ref` 写 arXiv ID **含版本号**或其他明确版本；`inputs` 至少包括论文主文，其他实际使用材料一并登记。
+`settings` 不支持或无法获知的值填 `null`，不得虚报为 0。阈值/比较集合未报告可为空数组，依赖它们的得分条件仍须止步；方法型 E3 可使用已冻结的其他意义路径，不能虚构阈值。`paper_ref` 写 arXiv ID **含版本号**或其他明确版本；`inputs` 至少包括论文主文，其他实际使用材料一并登记。
 
 ### 6.2 Schema 之外必须执行的语义校验
 
-标准 JSON Schema 不执行跨字段加总、中位数或字符串内 JSON 校验。导入程序必须另做以下校验，不得声称通过 Schema 即代表分数正确：
+标准 JSON Schema 不执行跨字段加总、中位数或证据真实性校验。导入程序必须另做以下校验，不得声称通过 Schema 即代表分数正确：
 
 1. 五维条目 ID 按顺序恰为 `N1–N5`、`D1–D4`、`E1–E8`、`R1–R2`、`C1`，无重复或跨维条目；每维 `score=Σcriteria.score`，每份 `total=Σdimensions.score`。
 2. 所有 `evidence.source_id` 存在于共同 `manifest.inputs`，所有定位与摘录可在该材料核对；通过的连续条件有证据，不得仅引用摘要自称支持全部条件。
-3. `original_output`、非空的 `recheck_output` 都能解析并通过 `$defs.agent_report` 和本节校验，agent_id 匹配；原文逐字保留，不以重新序列化后的摘要替换。
-4. 无复核时，各 `sub_scores` 的报告字段等于解析后的首轮原文；有复核时，等于解析后的复核原文。首轮分用于 `initial_spread`，当前有效分用于 `spread`。
+3. `original_output`、非空的 `recheck_output` 为完整对象，均通过 `$defs.agent_report` 和本节校验，agent_id 匹配；与根报告版本、manifest 一致，不以摘要替代。若需保留原始序列化文本，另用 `score import-report` 归档。
+4. 各 `sub_scores.total` 等于当前有效对象的总分；无复核时使用首轮，有复核时使用复核。首轮分用于 `initial_spread`，当前有效分用于 `spread`。`initial_critical_items` 与 `critical_items` 按第 4.3 节顺序分别列出触发门槛的条目（可以为空），由完整对象重算，不信任手填标记。
 5. 根 `total=median(sub_scores.total)`；`spread=max−min`。选择中位数代理，平分按 A→B→C；根维度、优势、不足与该代理完全一致。
-6. `initial_spread>10` 时必须 `rechecked=true、rounds=1`，三个 `recheck_output` 非空；否则 `rechecked=false、rounds=0`，三个 `recheck_output=null`。`unresolved_disagreement` 当且仅当复核后 `spread>10`；原因记录条目编号，不加入新扣分标准。
+6. `initial_spread>10` 或 `initial_critical_items` 非空时必须 `rechecked=true、rounds=1`，三个 `recheck_output` 为有效报告。未触发时允许一轮主动复核；无复核则 `rounds=0`，复核对象为空或省略。`unresolved_disagreement` 当且仅当复核后 `spread>10` 或 `critical_items` 非空；原因记录条目编号，不加入新扣分标准。
 7. 验证创新类型符合第 3.3 节顺序判据。任何校验失败都退回修正；不得静默截断、补 0、重分配权重或更换聚合方式。
 
 执行完成时交付：最终总分与五维分、Schema 合法的完整汇总 JSON、三份首轮评分原文及必要的三份复核原文。本文档以外的意见可作为明确标注的非评分评论，但不得进入分数、档次、创新标签或聚合结果。

@@ -204,9 +204,12 @@ polyscholar-cli score show <doc> [--summary] [--json]
 
 - **先取 rubric**:用 `rubric show paper|confidence` 直接读取打分文档全文,不必在文件系统里找路径;返回值含版本号与 SHA-256,可直接写进冻结材料包 manifest。**评分必须以 rubric 为唯一依据**,禁止引入 rubric 之外的标准。
 - **三盲评合卷已程序化**:`score aggregate --reports A.json B.json C.json` 依次完成——逐份结构校验(rubric_version/manifest/维度和=total/刻度)、核对三份版本与冻结材料包一致、取中位数、按 A→B→C 平局规则选中位数那位评委的代表报告、嵌入三份首轮原文(sub_scores[].original_output)、生成 rubric §6 汇总报告。agent 只需让三个隔离子代理各写一份报告文件,再调一次 aggregate,**不需要自写聚合/校验脚本**。
-  - 首轮极差超过 10(论文)/15(置信度)时,aggregate 不合卷,返回 `needs_recheck:true` + 分歧条目清单 + 已填好的复核指令模板;三个子代理复核后用 `--recheck` 重新聚合(复核原文存入 recheck_output,rounds=1)。复核后仍超限则按 rubric 输出中位数并标 `unresolved_disagreement:true`。
+  - 首轮极差超过 10(论文)/15(置信度)时,aggregate 不合卷,返回 `needs_recheck:true` + 分歧条目清单 + 已填好的复核指令模板;三个子代理复核后用 `--recheck` 重新聚合(复核原文存入 recheck_output,rounds=1)。论文量表 **1.1.0** 还要求：D1–D4、E1、E3、E4、E6、E7 任一条目极差 ≥2，即使总分相同也复核。需要复核时不导出、不入库；一轮后仍超限则保留中位数并标 `unresolved_disagreement:true`，不无限复核。
+  - 1.1.0 校验完整的 20 个整数条目、维度加总和证据字段；manifest 新增 `effect_context` 与 `meaningfulness_basis`，盲评前冻结主张类型和意义路径。应用主张须有预定义阈值/约束；方法主张可用具体性能—资源、规模或任务能力及匹配对照。复核与首轮的版本/manifest 必须一致。
+  - `aggregation.initial_critical_items/critical_items` 分别记录首轮/当前触发门槛的关键条目；`validate` 从完整对象重算这些字段与复核状态。`original_output/recheck_output` 为完整报告对象，原始序列化文本可另用 `import-report` 保存。
   - `--apply <doc>` 把聚合结果直接写入文献评分(score=中位数,--rationale/--rationale-file 为理由),`--out` 同时落盘 JSON——两步合成一步,agent 无需把报告内容读进上下文。
-- `score validate` 对任意汇总报告做同样的结构校验(含 median/spread/复核规则),失败逐条列出,退出码 1;`score set` 前建议先 validate。
+- `score validate` 对汇总报告做结构校验(含 median/spread/复核规则)，失败逐条列出，退出码 1；1.1.0 的评分写入也在共用存储入口强制校验，不能仅靠手填“已复核”绕过。程序不证明摘录真实或支持科学判断，评委仍须逐条核对原文。
+- 旧版 1.0.0 评分按旧规则保留，不自动转换、不修改已有分数；新标准需要重新开展盲评。置信度量表本轮不变。
 - `score import-report` 把三位评委的原始报告按 (文献,类型,评委槽位) 归档进库(≤1 MiB/份,重复导入覆盖同槽位);`score reports` 列出归档清单(--agent 时原样读回全文)。评分写库与原文归档相互独立,建议都做。
 - `score show --summary` 剔除内嵌评委原文,只返回分数/维度/聚合骨架——读状态用 summary,核对原文用 `reports --agent`。
 - rubric 规定三子代理盲评取中位数:三个隔离会话由 agent 侧组织(rubric §4.1),聚合、校验、复核判定全部由 aggregate 程序完成;`--score` 填最终中位数(用 --apply 时自动)。

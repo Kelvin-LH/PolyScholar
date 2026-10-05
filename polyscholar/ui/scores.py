@@ -69,6 +69,8 @@ def _render_kind(kind, entry):
     lines.append('<p>' + _text(entry.get('rationale') or '尚未记录评阅理由。') + '</p>')
     if detail.get('rubric_version'):
         lines.append('<p>评阅规则版本：' + _text(detail['rubric_version']) + '</p>')
+        if kind == 'paper' and detail['rubric_version'] == '1.0.0':
+            lines.append('<p>此为旧版评分；按新规则评阅需要重新评分，已有分数保留。</p>')
     if detail.get('verdict'):
         lines.append('<p>Agent 原始判断用语：' + _text(detail['verdict']) + '</p>')
     aggregation = detail.get('aggregation')
@@ -86,6 +88,11 @@ def _render_kind(kind, entry):
             lines.append('<p>' + _text('；'.join(parts)) + '</p>')
         if aggregation.get('recheck_reason'):
             lines.append('<p>复核原因：' + _text(aggregation['recheck_reason']) + '</p>')
+        for key, label in (('initial_critical_items', '首轮关键分项分歧'),
+                           ('critical_items', '当前关键分项分歧')):
+            items = aggregation.get(key)
+            if isinstance(items, list) and items:
+                lines.append('<p>' + label + '：' + _text('、'.join(str(item) for item in items)) + '</p>')
     dimensions = detail.get('dimensions')
     if isinstance(dimensions, list) and dimensions:
         lines.append('<h3>维度与理由</h3>')

@@ -25,6 +25,13 @@ def main():
     malformed = _render_kind('paper', {'detail': {'dimensions': [{'key': ['synthetic'], 'score': 'missing'}]}})
     assert 'synthetic' in malformed and '—' in malformed
     assert '&lt;img' in _render_kind('paper', {'rationale': '<img src=remote>'})
+    legacy = _render_kind('paper', {'score': 88, 'detail': {'rubric_version': '1.0.0'}})
+    assert '旧版评分' in legacy and '88 / 100' in legacy
+    disagreement = _render_kind('paper', {'detail': {'rubric_version': '1.1.0',
+        'aggregation': {'initial_critical_items': ['E1'], 'critical_items': ['D2', '<script>'],
+                        'unresolved_disagreement': True}}})
+    assert '首轮关键分项分歧：E1' in disagreement and '当前关键分项分歧：D2' in disagreement
+    assert '&lt;script&gt;' in disagreement and '<script>' not in disagreement
     app = QApplication([])
     app.setStyleSheet(STYLE)
 

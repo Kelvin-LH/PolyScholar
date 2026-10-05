@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import math
+from .scoring_review import uses_item_review, validate_paper_aggregation, validate_paper_items
 
 SCORE_REPORT_MAX_BYTES = 1024 * 1024
 SCORE_KINDS = ('paper', 'confidence', 'summary')
@@ -98,11 +99,20 @@ class ScoringLibrary:
                 raise ValueError('评分明细 JSON 不能超过 256 KiB。')
             if detail.strip():
                 try:
-                    json.loads(detail)
+                    parsed = json.loads(detail)
                 except json.JSONDecodeError:
                     raise ValueError('评分明细必须是有效 JSON。') from None
             else:
                 detail = '{}'
+                parsed = {}
+            # Validate new reports before any write; legacy rows keep their contract.
+            # 新报告在事务前完整校验；历史记录不静默转换，整批失败不写入。
+            if isinstance(parsed, dict) and uses_item_review(kind, parsed):
+                errors = validate_paper_items(parsed) + validate_paper_aggregation(parsed)
+                if score != parsed.get('total'):
+                    errors.append('存储分数与汇总 total 不一致。')
+                if errors:
+                    raise ValueError('论文 1.1.0 报告无效：' + ';'.join(errors))
             prepared.append((document_id, kind, score, rationale, detail))
         with self.lock:
             with self.connection() as db:

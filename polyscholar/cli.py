@@ -19,6 +19,10 @@ from .service import LocalService
 from . import arxiv as arxiv_client
 from .arxiv import NetworkError
 from .instance import LibraryBusy
+from .scoring_review import (
+    critical_disagreements, uses_item_review, validate_paper_aggregation,
+    validate_paper_items,
+)
 
 SCORE_KINDS = ('paper', 'confidence', 'summary')
 RUBRIC_FILES = {'paper': 'paper-scoring.md', 'confidence': 'confidence-scoring.md'}
@@ -407,6 +411,9 @@ def _validate_report(kind, report):
     errors = []
     if not isinstance(report, dict):
         return ['报告必须是 JSON 对象。']
+    if uses_item_review(kind, report):
+        errors.extend(validate_paper_items(report))
+        errors.extend(validate_paper_aggregation(report))
     total = report.get('total')
     if not isinstance(total, (int, float)) or isinstance(total, bool) or not 0 <= total <= 100:
         errors.append('total 必须是 0–100 的数值。')
@@ -422,7 +429,7 @@ def _validate_report(kind, report):
         seen = {}
         for dim in dims:
             key = dim.get('key') if isinstance(dim, dict) else None
-            if key not in limits:
+            if not isinstance(key, str) or key not in limits:
                 errors.append('维度 key 无效:%r(允许:%s)' % (key, ','.join(limits)))
                 continue
             score = dim.get('score')
@@ -432,7 +439,9 @@ def _validate_report(kind, report):
         missing = [key for key in limits if key not in seen]
         if missing:
             errors.append('缺少维度:' + ','.join(missing))
-        elif isinstance(total, (int, float)) and not isinstance(total, bool):
+        elif (all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                  for value in seen.values())
+              and isinstance(total, (int, float)) and not isinstance(total, bool)):
             if round(sum(seen.values()), 4) != round(float(total), 4):
                 errors.append('维度之和 %g 不等于 total %g。' % (sum(seen.values()), float(total)))
     for field in (('strengths', 'weaknesses') if kind == 'paper' else ('red_flags',)):
@@ -497,6 +506,10 @@ def _validate_agent_report(kind, report):
     errors = []
     if not isinstance(report, dict):
         return ['报告必须是 JSON 对象。']
+    if kind == 'paper' and report.get('rubric_version') not in ('1.0.0', '1.1.0'):
+        errors.append('不支持的论文量表版本；请读取 rubric show paper。')
+    if uses_item_review(kind, report):
+        errors.extend(validate_paper_items(report))
     if not isinstance(report.get('rubric_version'), str) or not report['rubric_version']:
         errors.append('缺少 rubric_version。')
     if not isinstance(report.get('manifest'), dict):
@@ -516,7 +529,7 @@ def _validate_agent_report(kind, report):
         seen = {}
         for dim in dims:
             key = dim.get('key') if isinstance(dim, dict) else None
-            if key not in limits:
+            if not isinstance(key, str) or key not in limits:
                 errors.append('维度 key 无效:%r' % (key,))
                 continue
             score = dim.get('score')
@@ -526,7 +539,9 @@ def _validate_agent_report(kind, report):
         missing = [key for key in limits if key not in seen]
         if missing:
             errors.append('缺少维度:' + ','.join(missing))
-        elif isinstance(total, (int, float)) and not isinstance(total, bool):
+        elif (all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                  for value in seen.values())
+              and isinstance(total, (int, float)) and not isinstance(total, bool)):
             if round(sum(seen.values()), 4) != round(float(total), 4):
                 errors.append('维度之和 %g 不等于 total %g。' % (sum(seen.values()), float(total)))
     for field in (('strengths', 'weaknesses') if kind == 'paper' else ('red_flags',)):
@@ -555,7 +570,6 @@ def _disagreement_items(reports):
     for key in per_agent[0]:
         if len({agent.get(key, (None, {}))[0] for agent in per_agent}) > 1:
             differing.append(key)
-            continue
         criteria_maps = [agent.get(key, (None, {}))[1] for agent in per_agent]
         # Criteria-level comparison only when all three agree on the item ids.
         if all(criteria_maps) and len({frozenset(item) for item in criteria_maps}) == 1:
@@ -698,7 +712,7 @@ def _cmd_score_aggregate(service, args):
     """Assemble three blind-review reports into the rubric §6 summary report.
 
     程序化 rubric §4.2/§4.3 的确定性部分:逐份校验、核对版本与冻结材料包一致、
-    取中位数、按 A→B→C 选代表报告、嵌入三份原文;首轮极差超限先发复核指令,
+    取中位数、按 A→B→C 选代表报告、嵌入三份原文;首轮总分/关键分项超限先发复核指令,
     复核后仍超限按 rubric 输出中位数并保留分歧。agent 不再自写聚合脚本。
     """
     if args.kind == 'summary':
@@ -717,6 +731,9 @@ def _cmd_score_aggregate(service, args):
     if per_file_errors:
         _print(dict(valid=False, errors=per_file_errors), args)
         return 1
+    item_review = uses_item_review(args.kind, first[0][1])
+    if item_review and any(report.get('agent_id') != slot for slot, report in first):
+        raise ValueError('1.1.0 首轮 agent_id 必须对应 --reports 的 A/B/C 顺序。')
     versions = {report.get('rubric_version') for _, report in first}
     if len(versions) > 1:
         raise ValueError('三份报告的 rubric_version 不一致:' + ','.join(sorted(versions)))
@@ -733,13 +750,20 @@ def _cmd_score_aggregate(service, args):
         if recheck_errors:
             _print(dict(valid=False, errors=recheck_errors), args)
             return 1
+        for slot, report in recheck:
+            if report.get('rubric_version') not in versions or json.dumps(
+                    report.get('manifest'), sort_keys=True, ensure_ascii=False) != manifests[0]:
+                raise ValueError('复核报告的版本/manifest 与首轮不一致；材料变更必须重开首轮。')
+            if item_review and report.get('agent_id') != slot:
+                raise ValueError('1.1.0 复核 agent_id 必须对应 A/B/C 顺序。')
     initial_totals = [report['total'] for _, report in first]
     initial_spread = max(initial_totals) - min(initial_totals)
     threshold = 10 if args.kind == 'paper' else 15
-    if initial_spread > threshold and recheck is None:
+    initial_items = critical_disagreements(first) if item_review else []
+    if (initial_spread > threshold or initial_items) and recheck is None:
         items = _disagreement_items(first)
         _print(dict(needs_recheck=True, spread=initial_spread, threshold=threshold,
-                    disagreement=items,
+                    disagreement=items, critical_items=initial_items,
                     directive=('本轮需复核条目:%s。请重新核对这些条目的连续条件与原文证据,并自检所有加总;'
                                '不要猜测其他代理的评分,不要以缩小分歧为目标;只按打分文档纠正不符合条文的判断,'
                                '重新输出完整 agent_report。' % ('、'.join(items) if items
@@ -750,6 +774,8 @@ def _cmd_score_aggregate(service, args):
     final_totals = [report['total'] for _, report in final]
     ordered = sorted(final_totals)
     median, spread = ordered[1], ordered[2] - ordered[0]
+    critical_items = critical_disagreements(final) if item_review else []
+    unresolved = spread > threshold or bool(critical_items)
     selected = next(slot for slot, report in final if report['total'] == median)
     representative = final[slots.index(selected)][1]
     sub_scores = []
@@ -765,9 +791,14 @@ def _cmd_score_aggregate(service, args):
                                       rechecked=recheck is not None,
                                       rounds=1 if recheck is not None else 0,
                                       selected_agent_id=selected,
-                                      unresolved_disagreement=spread > threshold))
-    if spread > threshold:
-        assembled['aggregation']['recheck_reason'] = '复核后极差仍超过 %d,按 rubric 输出中位数并保留分歧。' % threshold
+                                      unresolved_disagreement=unresolved,
+                                      recheck_reason=None))
+    if item_review:
+        assembled['aggregation'].update(initial_critical_items=initial_items, critical_items=critical_items)
+    if unresolved:
+        assembled['aggregation']['recheck_reason'] = (
+            '复核后仍有总分或关键条目分歧；总分极差 %g，关键条目：%s。保留中位数与分歧，不强制统一。'
+            % (spread, '、'.join(critical_items) or '无'))
     if args.kind == 'paper':
         assembled['strengths'] = representative.get('strengths')
         assembled['weaknesses'] = representative.get('weaknesses')
@@ -778,8 +809,10 @@ def _cmd_score_aggregate(service, args):
     if residual:
         raise ValueError('聚合结果未通过结构校验(请检查报告字段):' + ';'.join(residual))
     payload = dict(total=median, spread=spread, initial_spread=initial_spread,
-                   selected_agent_id=selected, unresolved_disagreement=spread > threshold,
+                   selected_agent_id=selected, unresolved_disagreement=unresolved,
                    rechecked=recheck is not None)
+    if item_review:
+        payload.update(initial_critical_items=initial_items, critical_items=critical_items)
     if args.out:
         payload['out'] = _export_aggregate_report(service, args.out, assembled)
     if args.apply:
